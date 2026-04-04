@@ -1,0 +1,5 @@
+{
+  "name": "AI Lesson Plan Generator",
+  "description": "Upload a subject PDF to automatically generate detailed lesson plans for every chapter using AI.",
+  "requestFramePermissions": []
+}
