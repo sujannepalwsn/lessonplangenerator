@@ -16,7 +16,10 @@ export async function parseBookPDF(pdfBase64: string): Promise<Partial<BookConte
             },
           },
           {
-            text: `Analyze this textbook PDF. Detect the language of the text (e.g., Nepali, English, etc.) and perform all extractions in that SAME language.
+            text: `Analyze this textbook PDF. 
+            
+            IMPORTANT: Some Nepali PDFs use legacy font encodings (like Preeti, Kantipur, etc.) where Nepali characters appear as Roman characters (e.g., "PsfO" for "इकाई", "kf7" for "पाठ", "j}1flgs" for "वैज्ञानिक"). 
+            If you detect this pattern, you MUST decode it and return the text in proper UNICODE NEPALI.
             
             Strictly extract the hierarchy: Unit (Ikai) -> Lesson (Path) -> Topic.
             A Unit contains multiple Lessons. A Lesson contains multiple Topics.
@@ -26,11 +29,11 @@ export async function parseBookPDF(pdfBase64: string): Promise<Partial<BookConte
             If this is a Mathematics book, ensure the content summary includes key formulas or concepts covered.
             
             Return a JSON array of objects with these keys:
-            - unit: The unit name or number (e.g., "Unit 1: Geometry")
-            - lesson: The lesson name or number (e.g., "Lesson 1.1: Triangles")
-            - topic: The specific topic name (e.g., "Types of Triangles")
-            - content: A detailed summary of the content for this topic (in the detected language)
-            - goals: The learning objectives for this topic (in the detected language)`,
+            - unit: The unit name or number in Unicode Nepali (e.g., "इकाई १: ज्यामिति")
+            - lesson: The lesson name or number in Unicode Nepali (e.g., "पाठ १.१: त्रिभुज")
+            - topic: The specific topic name in Unicode Nepali (e.g., "त्रिभुजका प्रकारहरू")
+            - content: A detailed summary of the content for this topic (in Unicode Nepali)
+            - goals: The learning objectives for this topic (in Unicode Nepali)`,
           },
         ],
       },
