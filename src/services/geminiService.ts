@@ -5,8 +5,41 @@ import { LessonPlan, BookContent } from "../types";
 const apiKey = import.meta.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || "";
 const ai = new GoogleGenAI({ apiKey });
 
+/**
+ * Helper function to call Gemini with retry logic for rate limits (429 errors)
+ */
+async function callGeminiWithRetry(params: any, maxRetries = 3): Promise<any> {
+  let lastError: any;
+  
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      return await ai.models.generateContent(params);
+    } catch (error: any) {
+      lastError = error;
+      
+      // Check if it's a rate limit error (429)
+      const isRateLimit = error?.status === "RESOURCE_EXHAUSTED" || 
+                          error?.message?.includes("429") || 
+                          error?.message?.includes("quota") ||
+                          error?.message?.includes("RESOURCE_EXHAUSTED");
+      
+      if (isRateLimit && i < maxRetries - 1) {
+        // Exponential backoff: 2s, 4s, 8s...
+        const delay = Math.pow(2, i + 1) * 1000;
+        console.warn(`Gemini rate limit hit. Retrying in ${delay}ms... (Attempt ${i + 1}/${maxRetries})`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+      
+      throw error;
+    }
+  }
+  
+  throw lastError;
+}
+
 export async function parseBookPDF(pdfBase64: string): Promise<Partial<BookContent>[]> {
-  const response = await ai.models.generateContent({
+  const response = await callGeminiWithRetry({
     model: "gemini-3-flash-preview",
     contents: [
       {
@@ -73,7 +106,7 @@ export async function parseBookPDF(pdfBase64: string): Promise<Partial<BookConte
 }
 
 export async function generatePlanFromContent(content: BookContent, subject: string, className: string, targetLanguage: string = 'English'): Promise<LessonPlan> {
-  const response = await ai.models.generateContent({
+  const response = await callGeminiWithRetry({
     model: "gemini-3-flash-preview",
     contents: [
       {
@@ -187,7 +220,7 @@ export async function generatePlanFromContent(content: BookContent, subject: str
 }
 
 export async function generatePlanFromPDFAndTopic(pdfBase64: string, content: BookContent, subject: string, className: string, targetLanguage: string = 'English'): Promise<LessonPlan> {
-  const response = await ai.models.generateContent({
+  const response = await callGeminiWithRetry({
     model: "gemini-3-flash-preview",
     contents: [
       {
@@ -313,7 +346,7 @@ export async function generatePlanFromPDFAndTopic(pdfBase64: string, content: Bo
 }
 
 export async function generateLessonPlansFromPDF(pdfBase64: string): Promise<LessonPlan[]> {
-  const response = await ai.models.generateContent({
+  const response = await callGeminiWithRetry({
     model: "gemini-3-flash-preview",
     contents: [
       {
