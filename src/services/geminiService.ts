@@ -16,15 +16,18 @@ export async function parseBookPDF(pdfBase64: string): Promise<Partial<BookConte
             },
           },
           {
-            text: `Analyze this textbook PDF. Extract every Unit, Lesson, and Topic. 
+            text: `Analyze this textbook PDF. Detect the language of the text (e.g., Nepali, English, etc.) and perform all extractions in that SAME language.
+            
+            Extract every Unit, Lesson, and Topic. 
             For each topic, provide a summary of the content and the primary goal/objective.
+            If this is a Mathematics book, ensure the content summary includes key formulas or concepts covered.
             
             Return a JSON array of objects with these keys:
             - unit: The unit name or number
             - lesson: The lesson name or number
             - topic: The specific topic name
-            - content: A detailed summary of the content for this topic
-            - goals: The learning objectives for this topic`,
+            - content: A detailed summary of the content for this topic (in the detected language)
+            - goals: The learning objectives for this topic (in the detected language)`,
           },
         ],
       },
@@ -62,6 +65,7 @@ export async function generatePlanFromContent(content: BookContent, subject: str
     contents: [
       {
         text: `Based on the following textbook content, generate a detailed lesson plan.
+        IMPORTANT: Use the SAME language as the provided content (e.g., if content is in Nepali, generate the plan in Nepali).
         
         SUBJECT: ${subject}
         CLASS: ${className}
@@ -75,8 +79,8 @@ export async function generatePlanFromContent(content: BookContent, subject: str
         - Period (40-45 mins)
         - Learning Outcomes
         - Warm up & Review
-        - Teaching Learning Activities (at least 4 steps)
-        - Class Review / Evaluation (at least 4 items)
+        - Teaching Learning Activities (at least 4 steps. For Mathematics, include specific problem-solving steps or examples)
+        - Class Review / Evaluation (at least 4 items. For Mathematics, include practice problems)
         - Class Work
         - Home Assignment
         - Remarks
