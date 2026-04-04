@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Upload, FileText, Loader2, Save, CheckCircle2, AlertCircle, ChevronDown, ChevronUp, Printer, BookOpen, Sparkles, List, GraduationCap, Book as BookIcon, Folder, RefreshCw, Trash2, Eye } from 'lucide-react';
+import { Upload, FileText, Loader2, Save, CheckCircle2, AlertCircle, ChevronDown, ChevronUp, Printer, BookOpen, Sparkles, List, GraduationCap, Book as BookIcon, Folder, RefreshCw, Trash2, Eye, Copy } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { parseBookPDF, generatePlanFromContent, generatePlanFromPDFAndTopic } from './services/geminiService';
 import { getSupabase } from './lib/supabase';
@@ -18,6 +18,10 @@ export default function App() {
   const [isGenerating, setIsGenerating] = useState(false);
   
   // Book Data
+  const [isBulkGenerating, setIsBulkGenerating] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState(0);
+  const [bulkTotal, setBulkTotal] = useState(0);
+
   const [bookMetadata, setBookMetadata] = useState({ title: '', subject: '', class: '' });
   const [overwriteMode, setOverwriteMode] = useState(false);
   const [selectedBookToOverwrite, setSelectedBookToOverwrite] = useState<string>('');
@@ -38,6 +42,7 @@ export default function App() {
   const [targetLanguage, setTargetLanguage] = useState<string>('English');
   const [viewingPdfUrl, setViewingPdfUrl] = useState<string | null>(null);
   const [viewingPlan, setViewingPlan] = useState<LessonPlan | null>(null);
+  const [generatedTopicIds, setGeneratedTopicIds] = useState<Set<string>>(new Set());
 
   // Filters for Lesson Plans tab
   const [filterGrade, setFilterGrade] = useState<string>('');
@@ -98,12 +103,6 @@ export default function App() {
     }
   }, [selectedBook]);
 
-  useEffect(() => {
-    if (selectedTopic || (selectedTopic && targetLanguage)) {
-      handleAutoGenerate(selectedTopic!);
-    }
-  }, [selectedTopic, targetLanguage]);
-
   const fetchGrades = async () => {
     try {
       const supabase = getSupabase();
@@ -147,14 +146,28 @@ export default function App() {
   const fetchTopics = async (bookId: string) => {
     try {
       const supabase = getSupabase();
-      const { data, error } = await supabase
+      const { data: topics, error: topicsError } = await supabase
         .from('book_contents')
         .select('id, book_id, unit, chapter, lesson, topic, sub_topic, content, goals, created_at')
         .eq('book_id', bookId)
         .order('created_at', { ascending: true });
       
-      if (error) throw error;
-      setAvailableTopics(data || []);
+      if (topicsError) throw topicsError;
+      setAvailableTopics(topics || []);
+
+      if (topics && topics.length > 0) {
+        const topicIds = topics.map(t => t.id);
+        const { data: plans, error: plansError } = await supabase
+          .from('lesson_plans')
+          .select('book_content_id')
+          .in('book_content_id', topicIds);
+        
+        if (plansError) throw plansError;
+        const generatedIds = new Set(plans?.map(p => p.book_content_id).filter(Boolean) as string[]);
+        setGeneratedTopicIds(generatedIds);
+      } else {
+        setGeneratedTopicIds(new Set());
+      }
     } catch (err) {
       console.error('Topics fetch error:', err);
     }
@@ -473,6 +486,101 @@ export default function App() {
     setViewingPdfUrl(null);
   };
 
+  const handleBulkGenerate = async () => {
+    if (!selectedBook || availableTopics.length === 0) return;
+    
+    setIsBulkGenerating(true);
+    setBulkProgress(0);
+    setBulkTotal(availableTopics.length);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const supabase = getSupabase();
+      
+      // Get PDF base64 if available for better generation
+      let pdfBase64: string | null = null;
+      if (selectedBook.file_path) {
+        const { data: pdfBlob, error: downloadError } = await supabase.storage
+          .from('books')
+          .download(selectedBook.file_path);
+        
+        if (!downloadError) {
+          const reader = new FileReader();
+          pdfBase64 = await new Promise<string>((resolve, reject) => {
+            reader.onload = () => resolve((reader.result as string).split(',')[1]);
+            reader.onerror = reject;
+            reader.readAsDataURL(pdfBlob);
+          });
+        }
+      }
+
+      for (let i = 0; i < availableTopics.length; i++) {
+        const topic = availableTopics[i];
+        setBulkProgress(i + 1);
+
+        // Check if plan already exists
+        const { data: existingPlan } = await supabase
+          .from('lesson_plans')
+          .select('id')
+          .eq('book_content_id', topic.id)
+          .maybeSingle();
+
+        let plan: LessonPlan;
+        try {
+          if (pdfBase64) {
+            plan = await generatePlanFromPDFAndTopic(pdfBase64, topic, selectedSubject, selectedGrade, targetLanguage);
+          } else {
+            plan = await generatePlanFromContent(topic, selectedSubject, selectedGrade, targetLanguage);
+          }
+
+          const planWithMetadata = {
+            ...plan,
+            center_id: '00000000-0000-0000-0000-000000000000',
+            teacher_id: '00000000-0000-0000-0000-000000000000',
+            book_content_id: topic.id,
+            class: selectedGrade,
+            subject: selectedSubject,
+            date: new Date().toLocaleDateString()
+          };
+
+          const fieldsToRemove = ['content', 'description', 'title', 'grade', 'status', 'updated_at', 'notes', 'objectives', 'learning_activities', 'evaluation_activities'];
+          fieldsToRemove.forEach(field => {
+            if (field in planWithMetadata) {
+              delete (planWithMetadata as any)[field];
+            }
+          });
+
+          if (existingPlan) {
+            await supabase
+              .from('lesson_plans')
+              .update({ ...planWithMetadata })
+              .eq('id', existingPlan.id);
+          } else {
+            await supabase
+              .from('lesson_plans')
+              .insert([planWithMetadata]);
+            setGeneratedTopicIds(prev => new Set(prev).add(topic.id!));
+          }
+          
+          // Small delay to prevent rate limiting
+          await new Promise(r => setTimeout(r, 500));
+        } catch (genErr) {
+          console.error(`Failed to generate plan for topic ${topic.topic}:`, genErr);
+          // Continue with next topic
+        }
+      }
+
+      setSuccess(`Successfully generated lesson plans for ${selectedBook.title}!`);
+      fetchHistory();
+    } catch (err) {
+      console.error('Bulk generation error:', err);
+      setError('Bulk generation failed. Please try again.');
+    } finally {
+      setIsBulkGenerating(false);
+    }
+  };
+
   const handleAutoGenerate = async (content: BookContent, forceRegenerate: boolean = false) => {
     setIsGenerating(true);
     setError(null);
@@ -561,7 +669,7 @@ export default function App() {
       };
 
       // CRITICAL: Remove fields that don't exist in the database schema
-      const fieldsToRemove = ['content', 'description', 'title', 'grade', 'status', 'updated_at', 'notes'];
+      const fieldsToRemove = ['content', 'description', 'title', 'grade', 'status', 'updated_at', 'notes', 'objectives', 'learning_activities', 'evaluation_activities'];
       fieldsToRemove.forEach(field => {
         if (field in planWithMetadata) {
           delete (planWithMetadata as any)[field];
@@ -597,6 +705,7 @@ export default function App() {
           throw saveError;
         }
         setCurrentPlan(savedPlan);
+        setGeneratedTopicIds(prev => new Set(prev).add(content.id!));
       }
       
       setSuccess(forceRegenerate ? `Lesson plan regenerated in ${targetLanguage}!` : `New ${targetLanguage} lesson plan generated and cached!`);
@@ -676,6 +785,55 @@ export default function App() {
     `;
     printWindow.document.write(content);
     printWindow.document.close();
+  };
+
+  const copyPlanToClipboard = (plan: LessonPlan) => {
+    const topic = plan.lesson_topic || (plan as any).topic;
+    const objectives = plan.learning_outcomes || plan.objectives;
+    const activities = plan.teaching_activities || plan.learning_activities || [];
+    const evaluation = plan.evaluation || plan.evaluation_activities || [];
+    const classwork = plan.class_work || [];
+    const homework = plan.home_assignment || [];
+    const warmUp = plan.warm_up_review || '';
+    const remarks = plan.principal_remarks || plan.remarks || '';
+
+    const sections = [
+      `TOPIC: ${topic}`,
+      `SUBJECT: ${plan.subject} | GRADE: ${plan.class} | DATE: ${plan.date || 'N/A'}`,
+      '',
+      '1. OBJECTIVES / LEARNING OUTCOMES',
+      objectives,
+      '',
+      '2. WARM UP & REVIEW',
+      warmUp,
+      '',
+      '3. TEACHING & LEARNING ACTIVITIES',
+      ...(Array.isArray(activities) ? activities.map((a, i) => `${String.fromCharCode(97 + i)}. ${a}`) : [activities]),
+      '',
+      '4. EVALUATION',
+      ...(Array.isArray(evaluation) ? evaluation.map((e, i) => `${String.fromCharCode(97 + i)}. ${e}`) : [evaluation]),
+      '',
+      'CLASS WORK',
+      ...(Array.isArray(classwork) ? classwork : [classwork]),
+      '',
+      'HOME ASSIGNMENT',
+      ...(Array.isArray(homework) ? homework : [homework]),
+      '',
+      remarks ? `REMARKS: ${remarks}` : ''
+    ];
+
+    const text = sections
+      .map(s => s === undefined ? '' : s)
+      .join('\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+
+    navigator.clipboard.writeText(text).then(() => {
+      setSuccess('Lesson plan content copied to clipboard!');
+    }).catch(err => {
+      console.error('Copy failed:', err);
+      setError('Failed to copy to clipboard.');
+    });
   };
 
   return (
@@ -1023,20 +1181,6 @@ export default function App() {
                   </select>
                 </div>
 
-                {/* Topic Selector */}
-                <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-500 uppercase flex items-center gap-2"><List className="w-4 h-4" /> Lesson/Topic</label>
-                  <select 
-                    value={selectedTopic?.id || ''} 
-                    onChange={e => setSelectedTopic(availableTopics.find(t => t.id === e.target.value) || null)}
-                    disabled={!selectedBook}
-                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:opacity-50"
-                  >
-                    <option value="">-- Topic --</option>
-                    {availableTopics.map((t, i) => <option key={`sel-t-${t.id}-${i}`} value={t.id}>{t.unit}: {t.topic}</option>)}
-                  </select>
-                </div>
-
                 {selectedBook && availableTopics.length === 0 && !isProcessing && (
                   <div className="col-span-full mt-2 p-3 bg-amber-50 border border-amber-100 rounded-xl flex items-center gap-2 text-amber-700 text-sm">
                     <AlertCircle className="w-4 h-4" />
@@ -1044,6 +1188,114 @@ export default function App() {
                   </div>
                 )}
               </div>
+
+              {/* Topic List & Bulk Generation */}
+              {selectedBook && availableTopics.length > 0 && (
+                <div className="mt-8 pt-8 border-t border-slate-100 space-y-8">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div className="flex items-center gap-4">
+                      <h3 className="text-xl font-bold flex items-center gap-2"><List className="text-indigo-600 w-5 h-5" /> Topics & Lessons</h3>
+                      <div className="text-sm text-slate-500">
+                        <span className="font-bold text-slate-700">{generatedTopicIds.size}</span> / {availableTopics.length} Generated
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-4 w-full sm:w-auto">
+                      {isBulkGenerating ? (
+                        <div className="flex-1 sm:w-64">
+                          <div className="flex justify-between text-xs font-bold text-indigo-600 mb-1 uppercase tracking-wider">
+                            <span>Bulk Generating...</span>
+                            <span>{Math.round((bulkProgress / bulkTotal) * 100)}%</span>
+                          </div>
+                          <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                            <motion.div 
+                              className="h-full bg-indigo-600"
+                              initial={{ width: 0 }}
+                              animate={{ width: `${(bulkProgress / bulkTotal) * 100}%` }}
+                            />
+                          </div>
+                          <p className="text-[10px] text-slate-400 mt-1 text-center">
+                            Processing {bulkProgress} of {bulkTotal} topics
+                          </p>
+                        </div>
+                      ) : (
+                        <button 
+                          onClick={handleBulkGenerate}
+                          disabled={isGenerating}
+                          className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-2 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 disabled:opacity-50 text-sm"
+                        >
+                          <Sparkles className="w-4 h-4" />
+                          Generate All Plans
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
+                    {availableTopics.map((topic) => {
+                      const isGenerated = generatedTopicIds.has(topic.id!);
+                      const isSelected = selectedTopic?.id === topic.id;
+                      
+                      return (
+                        <div 
+                          key={topic.id} 
+                          className={cn(
+                            "p-4 rounded-xl border transition-all flex items-center justify-between gap-4",
+                            isSelected ? "border-indigo-200 bg-indigo-50/30 ring-1 ring-indigo-200" : "border-slate-100 bg-slate-50/50 hover:bg-slate-50"
+                          )}
+                        >
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1">
+                              {isGenerated && <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />}
+                              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider truncate">{topic.unit}</span>
+                            </div>
+                            <h4 className="font-bold text-slate-800 truncate text-sm" title={topic.topic}>{topic.topic}</h4>
+                          </div>
+                          
+                          <div className="flex items-center gap-2">
+                            {isGenerated ? (
+                              <>
+                                <button 
+                                  onClick={() => {
+                                    setSelectedTopic(topic);
+                                    handleAutoGenerate(topic);
+                                  }}
+                                  className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-white rounded-lg transition-all"
+                                  title="View/Load Plan"
+                                >
+                                  <Eye className="w-4 h-4" />
+                                </button>
+                                <button 
+                                  onClick={() => {
+                                    setSelectedTopic(topic);
+                                    handleAutoGenerate(topic, true);
+                                  }}
+                                  disabled={isGenerating}
+                                  className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-white rounded-lg transition-all disabled:opacity-50"
+                                  title="Regenerate Plan"
+                                >
+                                  <RefreshCw className={cn("w-4 h-4", (isGenerating && isSelected) && "animate-spin")} />
+                                </button>
+                              </>
+                            ) : (
+                              <button 
+                                onClick={() => {
+                                  setSelectedTopic(topic);
+                                  handleAutoGenerate(topic);
+                                }}
+                                disabled={isGenerating}
+                                className="px-3 py-1.5 bg-indigo-600 text-white text-xs font-bold rounded-lg hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center gap-1"
+                              >
+                                <Sparkles className="w-3 h-3" /> Generate
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Generated Plan Display */}
@@ -1072,6 +1324,7 @@ export default function App() {
                       </button>
                       <button onClick={savePlan} className="bg-white/10 hover:bg-white/20 p-2 rounded-lg transition-all" title="Save to History"><Save className="w-5 h-5" /></button>
                       <button onClick={() => printPlan(currentPlan)} className="bg-white/10 hover:bg-white/20 p-2 rounded-lg transition-all" title="Print Plan"><Printer className="w-5 h-5" /></button>
+                      <button onClick={() => copyPlanToClipboard(currentPlan)} className="bg-white/10 hover:bg-white/20 p-2 rounded-lg transition-all" title="Copy Content"><Copy className="w-5 h-5" /></button>
                     </div>
                   </div>
                   
@@ -1201,6 +1454,9 @@ export default function App() {
                       <button onClick={() => printPlan(plan)} className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all" title="Print Plan">
                         <Printer className="w-5 h-5" />
                       </button>
+                      <button onClick={() => copyPlanToClipboard(plan)} className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all" title="Copy Content">
+                        <Copy className="w-5 h-5" />
+                      </button>
                     </div>
                   </div>
                 ))}
@@ -1238,6 +1494,7 @@ export default function App() {
                   </div>
                   <div className="flex gap-3">
                     <button onClick={() => printPlan(viewingPlan)} className="bg-white/10 hover:bg-white/20 p-2 rounded-lg transition-all" title="Print Plan"><Printer className="w-5 h-5" /></button>
+                    <button onClick={() => copyPlanToClipboard(viewingPlan)} className="bg-white/10 hover:bg-white/20 p-2 rounded-lg transition-all" title="Copy Content"><Copy className="w-5 h-5" /></button>
                     <button 
                       onClick={() => setViewingPlan(null)}
                       className="p-2 bg-white/10 hover:bg-white/20 rounded-lg transition-all"
