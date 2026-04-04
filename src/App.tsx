@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Upload, FileText, Loader2, Save, CheckCircle2, AlertCircle, ChevronDown, ChevronUp, Printer, BookOpen, Sparkles, List, GraduationCap, Book as BookIcon, Folder, RefreshCw, Trash2, Eye, Copy } from 'lucide-react';
+import { Upload, FileText, Loader2, Save, CheckCircle2, AlertCircle, ChevronDown, ChevronUp, Printer, BookOpen, Sparkles, List, GraduationCap, Book as BookIcon, Folder, RefreshCw, Trash2, Eye, Copy, Search, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { parseBookPDF, generatePlanFromContent, generatePlanFromPDFAndTopic } from './services/geminiService';
 import { getSupabase } from './lib/supabase';
@@ -47,6 +47,8 @@ export default function App() {
   // Filters for Lesson Plans tab
   const [filterGrade, setFilterGrade] = useState<string>('');
   const [filterSubject, setFilterSubject] = useState<string>('');
+  const [searchTerm, setSearchTerm] = useState<string>('');
+  const [topicSearchTerm, setTopicSearchTerm] = useState<string>('');
 
   // Plans Data
   const [currentPlan, setCurrentPlan] = useState<LessonPlan | null>(null);
@@ -1201,6 +1203,25 @@ export default function App() {
                     </div>
 
                     <div className="flex items-center gap-4 w-full sm:w-auto">
+                      <div className="relative flex-1 sm:w-64">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                        <input 
+                          type="text"
+                          placeholder="Search topics..."
+                          value={topicSearchTerm}
+                          onChange={e => setTopicSearchTerm(e.target.value)}
+                          className="w-full pl-10 pr-10 py-2 bg-white border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                        />
+                        {topicSearchTerm && (
+                          <button 
+                            onClick={() => setTopicSearchTerm('')}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 p-1 hover:bg-slate-100 rounded-full text-slate-400"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
+
                       {isBulkGenerating ? (
                         <div className="flex-1 sm:w-64">
                           <div className="flex justify-between text-xs font-bold text-indigo-600 mb-1 uppercase tracking-wider">
@@ -1232,68 +1253,77 @@ export default function App() {
                   </div>
                   
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
-                    {availableTopics.map((topic) => {
-                      const isGenerated = generatedTopicIds.has(topic.id!);
-                      const isSelected = selectedTopic?.id === topic.id;
-                      
-                      return (
-                        <div 
-                          key={topic.id} 
-                          className={cn(
-                            "p-4 rounded-xl border transition-all flex items-center justify-between gap-4",
-                            isSelected ? "border-indigo-200 bg-indigo-50/30 ring-1 ring-indigo-200" : "border-slate-100 bg-slate-50/50 hover:bg-slate-50"
-                          )}
-                        >
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 mb-1">
-                              {isGenerated && <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />}
-                              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider truncate">{topic.unit}</span>
+                    {availableTopics
+                      .filter(t => !topicSearchTerm || t.topic.toLowerCase().includes(topicSearchTerm.toLowerCase()) || t.unit.toLowerCase().includes(topicSearchTerm.toLowerCase()))
+                      .map((topic) => {
+                        const isGenerated = generatedTopicIds.has(topic.id!);
+                        const isSelected = selectedTopic?.id === topic.id;
+                        
+                        return (
+                          <div 
+                            key={topic.id} 
+                            className={cn(
+                              "p-4 rounded-xl border transition-all flex items-center justify-between gap-4",
+                              isSelected ? "border-indigo-200 bg-indigo-50/30 ring-1 ring-indigo-200" : "border-slate-100 bg-slate-50/50 hover:bg-slate-50"
+                            )}
+                          >
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 mb-1">
+                                {isGenerated && <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />}
+                                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider truncate">{topic.unit}</span>
+                              </div>
+                              <h4 className="font-bold text-slate-800 truncate text-sm" title={topic.topic}>{topic.topic}</h4>
                             </div>
-                            <h4 className="font-bold text-slate-800 truncate text-sm" title={topic.topic}>{topic.topic}</h4>
-                          </div>
-                          
-                          <div className="flex items-center gap-2">
-                            {isGenerated ? (
-                              <>
+                            
+                            <div className="flex items-center gap-2">
+                              {isGenerated ? (
+                                <>
+                                  <button 
+                                    onClick={() => {
+                                      setSelectedTopic(topic);
+                                      handleAutoGenerate(topic);
+                                    }}
+                                    className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-white rounded-lg transition-all"
+                                    title="View/Load Plan"
+                                  >
+                                    <Eye className="w-4 h-4" />
+                                  </button>
+                                  <button 
+                                    onClick={() => {
+                                      setSelectedTopic(topic);
+                                      handleAutoGenerate(topic, true);
+                                    }}
+                                    disabled={isGenerating}
+                                    className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-white rounded-lg transition-all disabled:opacity-50"
+                                    title="Regenerate Plan"
+                                  >
+                                    <RefreshCw className={cn("w-4 h-4", (isGenerating && isSelected) && "animate-spin")} />
+                                  </button>
+                                </>
+                              ) : (
                                 <button 
                                   onClick={() => {
                                     setSelectedTopic(topic);
                                     handleAutoGenerate(topic);
                                   }}
-                                  className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-white rounded-lg transition-all"
-                                  title="View/Load Plan"
-                                >
-                                  <Eye className="w-4 h-4" />
-                                </button>
-                                <button 
-                                  onClick={() => {
-                                    setSelectedTopic(topic);
-                                    handleAutoGenerate(topic, true);
-                                  }}
                                   disabled={isGenerating}
-                                  className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-white rounded-lg transition-all disabled:opacity-50"
-                                  title="Regenerate Plan"
+                                  className="px-3 py-1.5 bg-indigo-600 text-white text-xs font-bold rounded-lg hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center gap-1"
                                 >
-                                  <RefreshCw className={cn("w-4 h-4", (isGenerating && isSelected) && "animate-spin")} />
+                                  <Sparkles className="w-3 h-3" /> Generate
                                 </button>
-                              </>
-                            ) : (
-                              <button 
-                                onClick={() => {
-                                  setSelectedTopic(topic);
-                                  handleAutoGenerate(topic);
-                                }}
-                                disabled={isGenerating}
-                                className="px-3 py-1.5 bg-indigo-600 text-white text-xs font-bold rounded-lg hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center gap-1"
-                              >
-                                <Sparkles className="w-3 h-3" /> Generate
-                              </button>
-                            )}
+                              )}
+                            </div>
                           </div>
-                        </div>
-                      );
-                    })}
+                        );
+                      })}
                   </div>
+                  
+                  {availableTopics.filter(t => !topicSearchTerm || t.topic.toLowerCase().includes(topicSearchTerm.toLowerCase()) || t.unit.toLowerCase().includes(topicSearchTerm.toLowerCase())).length === 0 && (
+                    <div className="text-center py-10 bg-slate-50 rounded-2xl border border-slate-100 border-dashed">
+                      <Search className="w-10 h-10 text-slate-200 mx-auto mb-3" />
+                      <p className="text-slate-400 text-sm">No topics match your search.</p>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1413,7 +1443,26 @@ export default function App() {
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
               <h3 className="text-2xl font-bold text-slate-800">Saved Lesson Plans</h3>
               
-              <div className="flex flex-wrap gap-3">
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="relative flex-1 min-w-[250px]">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                  <input 
+                    type="text"
+                    placeholder="Search lessons, topics, subjects..."
+                    value={searchTerm}
+                    onChange={e => setSearchTerm(e.target.value)}
+                    className="w-full pl-10 pr-10 py-2 bg-white border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                  />
+                  {searchTerm && (
+                    <button 
+                      onClick={() => setSearchTerm('')}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 p-1 hover:bg-slate-100 rounded-full text-slate-400"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+
                 <select 
                   value={filterGrade} 
                   onChange={e => setFilterGrade(e.target.value)}
@@ -1440,7 +1489,18 @@ export default function App() {
 
             <div className="space-y-4">
               {planHistory
-                .filter(p => (!filterGrade || p.class === filterGrade) && (!filterSubject || p.subject === filterSubject))
+                .filter(p => {
+                  const matchesGrade = !filterGrade || p.class === filterGrade;
+                  const matchesSubject = !filterSubject || p.subject === filterSubject;
+                  const searchLower = searchTerm.toLowerCase();
+                  const matchesSearch = !searchTerm || 
+                    (p.lesson_topic || '').toLowerCase().includes(searchLower) ||
+                    (p.subject || '').toLowerCase().includes(searchLower) ||
+                    (p.chapter || '').toLowerCase().includes(searchLower) ||
+                    (p.class || '').toLowerCase().includes(searchLower);
+                  
+                  return matchesGrade && matchesSubject && matchesSearch;
+                })
                 .map((plan, idx) => (
                   <div key={`history-item-${plan.id}-${idx}`} className="bg-white rounded-xl border border-slate-200 p-6 flex items-center justify-between shadow-sm hover:shadow-md transition-all">
                     <div>
@@ -1461,6 +1521,22 @@ export default function App() {
                   </div>
                 ))}
               
+              {planHistory.length > 0 && planHistory.filter(p => {
+                const matchesGrade = !filterGrade || p.class === filterGrade;
+                const matchesSubject = !filterSubject || p.subject === filterSubject;
+                const searchLower = searchTerm.toLowerCase();
+                return matchesGrade && matchesSubject && (!searchTerm || 
+                  (p.lesson_topic || '').toLowerCase().includes(searchLower) ||
+                  (p.subject || '').toLowerCase().includes(searchLower) ||
+                  (p.chapter || '').toLowerCase().includes(searchLower) ||
+                  (p.class || '').toLowerCase().includes(searchLower));
+              }).length === 0 && (
+                <div className="text-center py-20 bg-white rounded-2xl border border-slate-200 border-dashed">
+                  <Search className="w-12 h-12 text-slate-200 mx-auto mb-4" />
+                  <p className="text-slate-400">No lesson plans match your search or filters.</p>
+                </div>
+              )}
+
               {planHistory.length === 0 && (
                 <div className="text-center py-20 bg-white rounded-2xl border border-slate-200 border-dashed">
                   <FileText className="w-12 h-12 text-slate-200 mx-auto mb-4" />

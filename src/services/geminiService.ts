@@ -1,7 +1,9 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { LessonPlan, BookContent } from "../types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
+// Use import.meta.env for Vite/Vercel deployments, fallback to process.env for AI Studio environment
+const apiKey = import.meta.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || "";
+const ai = new GoogleGenAI({ apiKey });
 
 export async function parseBookPDF(pdfBase64: string): Promise<Partial<BookContent>[]> {
   const response = await ai.models.generateContent({
