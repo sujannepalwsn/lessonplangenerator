@@ -18,22 +18,25 @@ export async function parseBookPDF(pdfBase64: string): Promise<Partial<BookConte
           {
             text: `Analyze this textbook PDF. 
             
-            IMPORTANT: Some Nepali PDFs use legacy font encodings (like Preeti, Kantipur, etc.) where Nepali characters appear as Roman characters (e.g., "PsfO" for "इकाई", "kf7" for "पाठ", "j}1flgs" for "वैज्ञानिक"). 
-            If you detect this pattern, you MUST decode it and return the text in proper UNICODE NEPALI.
+            1. Detect the primary language of the text. 
+            2. If the text is in English, perform all extractions in English. 
+            3. If the text is in Nepali but uses legacy font encodings (like Preeti, where "PsfO" = "इकाई"), decode it to proper UNICODE NEPALI.
+            4. If the text is in standard Unicode Nepali, keep it in Unicode Nepali.
             
-            Strictly extract the hierarchy: Unit (Ikai) -> Lesson (Path) -> Topic.
-            A Unit contains multiple Lessons. A Lesson contains multiple Topics.
-            Ensure you capture every specific Lesson within each Unit, and every Topic within each Lesson.
+            Strictly extract the hierarchy: Unit -> Chapter -> Lesson -> Topic -> Sub-topic.
+            Ensure you capture every level available in the book.
             
-            For each topic, provide a summary of the content and the primary goal/objective.
+            For each specific topic/sub-topic, provide a summary of the content and the primary goal/objective.
             If this is a Mathematics book, ensure the content summary includes key formulas or concepts covered.
             
             Return a JSON array of objects with these keys:
-            - unit: The unit name or number in Unicode Nepali (e.g., "इकाई १: ज्यामिति")
-            - lesson: The lesson name or number in Unicode Nepali (e.g., "पाठ १.१: त्रिभुज")
-            - topic: The specific topic name in Unicode Nepali (e.g., "त्रिभुजका प्रकारहरू")
-            - content: A detailed summary of the content for this topic (in Unicode Nepali)
-            - goals: The learning objectives for this topic (in Unicode Nepali)`,
+            - unit: The unit name/number
+            - chapter: The chapter name/number (if applicable)
+            - lesson: The lesson name/number
+            - topic: The specific topic name
+            - sub_topic: The sub-topic name (if applicable)
+            - content: A detailed summary of the content for this topic (in the detected language)
+            - goals: The learning objectives for this topic (in the detected language)`,
           },
         ],
       },
@@ -46,8 +49,10 @@ export async function parseBookPDF(pdfBase64: string): Promise<Partial<BookConte
           type: Type.OBJECT,
           properties: {
             unit: { type: Type.STRING },
+            chapter: { type: Type.STRING },
             lesson: { type: Type.STRING },
             topic: { type: Type.STRING },
+            sub_topic: { type: Type.STRING },
             content: { type: Type.STRING },
             goals: { type: Type.STRING }
           },
@@ -77,6 +82,7 @@ export async function generatePlanFromContent(content: BookContent, subject: str
         SUBJECT: ${subject}
         CLASS: ${className}
         UNIT: ${content.unit}
+        CHAPTER: ${content.chapter || ''}
         LESSON: ${content.lesson}
         TOPIC: ${content.topic}
         CONTENT SUMMARY: ${content.content}
@@ -84,15 +90,34 @@ export async function generatePlanFromContent(content: BookContent, subject: str
 
         Generate a lesson plan with:
         - Period (40-45 mins)
-        - Learning Outcomes
+        - Objectives (Learning Outcomes)
         - Warm up & Review
-        - Teaching Learning Activities (at least 4 steps. For Mathematics, include specific problem-solving steps or examples)
-        - Class Review / Evaluation (at least 4 items. For Mathematics, include practice problems)
-        - Class Work
-        - Home Assignment
-        - Remarks
+        - Learning Activities (at least 4 steps. For Mathematics, include specific problem-solving steps or examples)
+        - Evaluation Activities (at least 4 items. For Mathematics, include practice problems)
+        - Class Work (Summary text)
+        - Home Assignment (Summary text)
+        - Principal Remarks (leave empty or generic)
+        - Notes (any additional teacher notes)
 
-        Return as a JSON object matching the LessonPlan schema.`,
+        Return as a JSON object matching this schema:
+        {
+          "subject": string,
+          "class": string,
+          "grade": string,
+          "chapter": string,
+          "period": string,
+          "topic": string,
+          "objectives": string,
+          "warm_up_review": string,
+          "learning_activities": string[],
+          "evaluation_activities": string[],
+          "class_work": string,
+          "home_assignment": string,
+          "principal_remarks": string,
+          "notes": string,
+          "title": string,
+          "description": string
+        }`,
       },
     ],
     config: {
@@ -102,34 +127,30 @@ export async function generatePlanFromContent(content: BookContent, subject: str
         properties: {
           subject: { type: Type.STRING },
           class: { type: Type.STRING },
-          unit: { type: Type.STRING },
+          grade: { type: Type.STRING },
+          chapter: { type: Type.STRING },
           period: { type: Type.STRING },
-          lesson_topic: { type: Type.STRING },
-          date: { type: Type.STRING },
-          learning_outcomes: { type: Type.STRING },
+          topic: { type: Type.STRING },
+          objectives: { type: Type.STRING },
           warm_up_review: { type: Type.STRING },
-          teaching_activities: {
+          learning_activities: {
             type: Type.ARRAY,
             items: { type: Type.STRING }
           },
-          evaluation: {
+          evaluation_activities: {
             type: Type.ARRAY,
             items: { type: Type.STRING }
           },
-          class_work: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING }
-          },
-          home_assignment: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING }
-          },
-          remarks: { type: Type.STRING }
+          class_work: { type: Type.STRING },
+          home_assignment: { type: Type.STRING },
+          principal_remarks: { type: Type.STRING },
+          notes: { type: Type.STRING },
+          title: { type: Type.STRING },
+          description: { type: Type.STRING }
         },
         required: [
-          "subject", "class", "unit", "period", "lesson_topic", 
-          "learning_outcomes", "warm_up_review", "teaching_activities", 
-          "evaluation", "class_work", "home_assignment"
+          "subject", "class", "topic", "objectives", "warm_up_review", 
+          "learning_activities", "evaluation_activities", "class_work", "home_assignment"
         ]
       }
     },
@@ -137,7 +158,15 @@ export async function generatePlanFromContent(content: BookContent, subject: str
 
   try {
     const plan = JSON.parse(response.text || "{}");
-    return { ...plan, book_content_id: content.id };
+    return { 
+      ...plan, 
+      book_content_id: content.id,
+      content: content.content, // Include the original content summary
+      status: 'draft',
+      center_id: '00000000-0000-0000-0000-000000000000', // Placeholder
+      teacher_id: null, // Placeholder
+      updated_at: new Date().toISOString()
+    };
   } catch (e) {
     console.error("Failed to parse Gemini response", e);
     throw new Error("Failed to generate lesson plan");
