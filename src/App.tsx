@@ -24,11 +24,14 @@ export default function App() {
   // Selector State
   const [availableGrades, setAvailableGrades] = useState<string[]>([]);
   const [availableSubjects, setAvailableSubjects] = useState<string[]>([]);
+  const [availableBooks, setAvailableBooks] = useState<Book[]>([]);
   const [availableTopics, setAvailableTopics] = useState<BookContent[]>([]);
   
   const [selectedGrade, setSelectedGrade] = useState<string>('');
   const [selectedSubject, setSelectedSubject] = useState<string>('');
+  const [selectedBook, setSelectedBook] = useState<Book | null>(null);
   const [selectedTopic, setSelectedTopic] = useState<BookContent | null>(null);
+  const [targetLanguage, setTargetLanguage] = useState<string>('English');
 
   // Plans Data
   const [currentPlan, setCurrentPlan] = useState<LessonPlan | null>(null);
@@ -47,6 +50,7 @@ export default function App() {
     if (selectedGrade) {
       fetchSubjects(selectedGrade);
       setSelectedSubject('');
+      setSelectedBook(null);
       setSelectedTopic(null);
       setCurrentPlan(null);
     }
@@ -54,17 +58,26 @@ export default function App() {
 
   useEffect(() => {
     if (selectedSubject && selectedGrade) {
-      fetchTopics(selectedGrade, selectedSubject);
+      fetchBooks(selectedGrade, selectedSubject);
+      setSelectedBook(null);
       setSelectedTopic(null);
       setCurrentPlan(null);
     }
   }, [selectedSubject, selectedGrade]);
 
   useEffect(() => {
-    if (selectedTopic) {
-      handleAutoGenerate(selectedTopic);
+    if (selectedBook) {
+      fetchTopics(selectedBook.id);
+      setSelectedTopic(null);
+      setCurrentPlan(null);
     }
-  }, [selectedTopic]);
+  }, [selectedBook]);
+
+  useEffect(() => {
+    if (selectedTopic || (selectedTopic && targetLanguage)) {
+      handleAutoGenerate(selectedTopic!);
+    }
+  }, [selectedTopic, targetLanguage]);
 
   const fetchGrades = async () => {
     try {
@@ -90,23 +103,29 @@ export default function App() {
     }
   };
 
-  const fetchTopics = async (grade: string, subject: string) => {
+  const fetchBooks = async (grade: string, subject: string) => {
     try {
       const supabase = getSupabase();
-      // First get the book ID
-      const { data: bookData, error: bookError } = await supabase
+      const { data, error } = await supabase
         .from('books')
-        .select('id')
+        .select('*')
         .eq('class', grade)
-        .eq('subject', subject)
-        .single();
+        .eq('subject', subject);
       
-      if (bookError) throw bookError;
+      if (error) throw error;
+      setAvailableBooks(data || []);
+    } catch (err) {
+      console.error('Books fetch error:', err);
+    }
+  };
 
+  const fetchTopics = async (bookId: string) => {
+    try {
+      const supabase = getSupabase();
       const { data, error } = await supabase
         .from('book_contents')
         .select('*')
-        .eq('book_id', bookData.id)
+        .eq('book_id', bookId)
         .order('created_at', { ascending: true });
       
       if (error) throw error;
@@ -169,23 +188,53 @@ export default function App() {
 
     try {
       const supabase = getSupabase();
-      const { data: bookData, error: bookError } = await supabase
+      
+      // Check if a book with the same title, subject, and class already exists
+      const { data: existingBook, error: checkError } = await supabase
         .from('books')
-        .insert([bookMetadata])
-        .select()
-        .single();
+        .select('id')
+        .eq('title', bookMetadata.title)
+        .eq('subject', bookMetadata.subject)
+        .eq('class', bookMetadata.class)
+        .maybeSingle();
 
-      if (bookError) throw bookError;
+      if (checkError) throw checkError;
+
+      let bookId: string;
+
+      if (existingBook) {
+        // Overwrite: delete existing contents for this book
+        bookId = existingBook.id;
+        const { error: deleteError } = await supabase
+          .from('book_contents')
+          .delete()
+          .eq('book_id', bookId);
+        
+        if (deleteError) throw deleteError;
+        
+        // Update book metadata if needed (optional, but good for consistency)
+        await supabase.from('books').update(bookMetadata).eq('id', bookId);
+      } else {
+        // Create new book
+        const { data: newBook, error: bookError } = await supabase
+          .from('books')
+          .insert([bookMetadata])
+          .select()
+          .single();
+
+        if (bookError) throw bookError;
+        bookId = newBook.id;
+      }
 
       const contentsToSave = parsedContents.map(c => ({
         ...c,
-        book_id: bookData.id
+        book_id: bookId
       }));
 
       const { error: contentsError } = await supabase.from('book_contents').insert(contentsToSave);
       if (contentsError) throw contentsError;
 
-      setSuccess('Book and all contents saved to library!');
+      setSuccess(existingBook ? 'Book contents updated (overwritten)!' : 'Book and all contents saved to library!');
       setParsedContents([]);
       setFile(null);
       fetchGrades();
@@ -207,7 +256,12 @@ export default function App() {
     try {
       const supabase = getSupabase();
       
-      // 1. Check if a plan already exists in the database for this content
+      // 1. Check if a plan already exists in the database for this content AND language
+      // Note: We'll assume the 'remarks' or a new column could store language, 
+      // but for now let's just check if the plan's content looks like the target language 
+      // or simply regenerate if the user explicitly changes it.
+      // To be robust, we should ideally have a 'language' column in lesson_plans.
+      
       const { data: existingPlan, error: fetchError } = await supabase
         .from('lesson_plans')
         .select('*')
@@ -216,33 +270,51 @@ export default function App() {
 
       if (fetchError) console.error('Error checking existing plan:', fetchError);
 
+      // Simple check: if existing plan exists, we show it. 
+      // If the user wants a different language, they might need a way to "Regenerate".
+      // For now, if the plan exists, we'll assume it's the one they want unless we add language tracking.
       if (existingPlan) {
-        // Use cached plan from database
-        setCurrentPlan(existingPlan);
-        setSuccess(`Retrieved existing plan for: ${content.topic} (No API call used)`);
-        setIsGenerating(false);
-        return;
+        // Basic heuristic: check if the plan's outcomes contain Nepali characters if target is Nepali
+        const isNepali = (text: string) => /[\u0900-\u097F]/.test(text);
+        const planIsNepali = isNepali(existingPlan.learning_outcomes);
+        const targetIsNepali = targetLanguage === 'Nepali';
+
+        if (planIsNepali === targetIsNepali) {
+          setCurrentPlan(existingPlan);
+          setSuccess(`Retrieved existing ${targetLanguage} plan for: ${content.topic}`);
+          setIsGenerating(false);
+          return;
+        }
       }
 
-      // 2. If no plan exists, generate it using AI
-      const plan = await generatePlanFromContent(content, selectedSubject, selectedGrade);
+      // 2. If no plan exists or language mismatch, generate it using AI
+      const plan = await generatePlanFromContent(content, selectedSubject, selectedGrade, targetLanguage);
       
-      // 3. Auto-save the generated plan to the database for future use (caching)
-      const { data: savedPlan, error: saveError } = await supabase
-        .from('lesson_plans')
-        .insert([{ ...plan, book_content_id: content.id }])
-        .select()
-        .single();
-
-      if (saveError) {
-        console.error('Error auto-saving plan:', saveError);
-        // Still show the plan even if save fails
-        setCurrentPlan(plan);
+      // 3. Auto-save/Update the generated plan
+      if (existingPlan) {
+        // Update existing
+        const { data: updatedPlan, error: updateError } = await supabase
+          .from('lesson_plans')
+          .update({ ...plan })
+          .eq('id', existingPlan.id)
+          .select()
+          .single();
+        
+        if (updateError) throw updateError;
+        setCurrentPlan(updatedPlan);
       } else {
+        // Insert new
+        const { data: savedPlan, error: saveError } = await supabase
+          .from('lesson_plans')
+          .insert([{ ...plan, book_content_id: content.id }])
+          .select()
+          .single();
+
+        if (saveError) throw saveError;
         setCurrentPlan(savedPlan);
       }
       
-      setSuccess(`New lesson plan generated and cached for: ${content.topic}`);
+      setSuccess(`New ${targetLanguage} lesson plan generated and cached!`);
       fetchHistory();
     } catch (err) {
       console.error(err);
@@ -369,46 +441,76 @@ export default function App() {
         {activeTab === 'generator' && (
           <section className="space-y-8">
             <div className="bg-white rounded-2xl border border-slate-200 p-8 shadow-sm">
-              <h2 className="text-2xl font-bold mb-6 flex items-center gap-2"><Sparkles className="text-indigo-600 w-6 h-6" /> Lesson Plan Generator</h2>
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+                <h2 className="text-2xl font-bold flex items-center gap-2"><Sparkles className="text-indigo-600 w-6 h-6" /> Lesson Plan Generator</h2>
+                <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-xl">
+                  <button 
+                    onClick={() => setTargetLanguage('English')} 
+                    className={cn("px-4 py-1.5 rounded-lg text-sm font-bold transition-all", targetLanguage === 'English' ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500")}
+                  >
+                    English
+                  </button>
+                  <button 
+                    onClick={() => setTargetLanguage('Nepali')} 
+                    className={cn("px-4 py-1.5 rounded-lg text-sm font-bold transition-all", targetLanguage === 'Nepali' ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500")}
+                  >
+                    Nepali
+                  </button>
+                </div>
+              </div>
               
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
                 {/* Grade Selector */}
                 <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-500 uppercase flex items-center gap-2"><GraduationCap className="w-4 h-4" /> Select Grade</label>
+                  <label className="text-sm font-bold text-slate-500 uppercase flex items-center gap-2"><GraduationCap className="w-4 h-4" /> Grade</label>
                   <select 
                     value={selectedGrade} 
                     onChange={e => setSelectedGrade(e.target.value)}
                     className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                   >
-                    <option value="">-- Choose Grade --</option>
+                    <option value="">-- Grade --</option>
                     {availableGrades.map(g => <option key={g} value={g}>{g}</option>)}
                   </select>
                 </div>
 
                 {/* Subject Selector */}
                 <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-500 uppercase flex items-center gap-2"><BookIcon className="w-4 h-4" /> Select Subject</label>
+                  <label className="text-sm font-bold text-slate-500 uppercase flex items-center gap-2"><BookIcon className="w-4 h-4" /> Subject</label>
                   <select 
                     value={selectedSubject} 
                     onChange={e => setSelectedSubject(e.target.value)}
                     disabled={!selectedGrade}
                     className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:opacity-50"
                   >
-                    <option value="">-- Choose Subject --</option>
+                    <option value="">-- Subject --</option>
                     {availableSubjects.map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </div>
+
+                {/* Book Selector */}
+                <div className="space-y-2">
+                  <label className="text-sm font-bold text-slate-500 uppercase flex items-center gap-2"><BookOpen className="w-4 h-4" /> Book</label>
+                  <select 
+                    value={selectedBook?.id || ''} 
+                    onChange={e => setSelectedBook(availableBooks.find(b => b.id === e.target.value) || null)}
+                    disabled={!selectedSubject}
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:opacity-50"
+                  >
+                    <option value="">-- Book --</option>
+                    {availableBooks.map(b => <option key={b.id} value={b.id}>{b.title}</option>)}
                   </select>
                 </div>
 
                 {/* Topic Selector */}
                 <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-500 uppercase flex items-center gap-2"><List className="w-4 h-4" /> Select Lesson/Topic</label>
+                  <label className="text-sm font-bold text-slate-500 uppercase flex items-center gap-2"><List className="w-4 h-4" /> Lesson/Topic</label>
                   <select 
                     value={selectedTopic?.id || ''} 
                     onChange={e => setSelectedTopic(availableTopics.find(t => t.id === e.target.value) || null)}
-                    disabled={!selectedSubject}
+                    disabled={!selectedBook}
                     className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:opacity-50"
                   >
-                    <option value="">-- Choose Topic --</option>
+                    <option value="">-- Topic --</option>
                     {availableTopics.map(t => <option key={t.id} value={t.id}>{t.unit}: {t.topic}</option>)}
                   </select>
                 </div>

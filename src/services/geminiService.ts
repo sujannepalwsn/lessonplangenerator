@@ -18,14 +18,17 @@ export async function parseBookPDF(pdfBase64: string): Promise<Partial<BookConte
           {
             text: `Analyze this textbook PDF. Detect the language of the text (e.g., Nepali, English, etc.) and perform all extractions in that SAME language.
             
-            Extract every Unit, Lesson, and Topic. 
+            Strictly extract the hierarchy: Unit (Ikai) -> Lesson (Path) -> Topic.
+            A Unit contains multiple Lessons. A Lesson contains multiple Topics.
+            Ensure you capture every specific Lesson within each Unit, and every Topic within each Lesson.
+            
             For each topic, provide a summary of the content and the primary goal/objective.
             If this is a Mathematics book, ensure the content summary includes key formulas or concepts covered.
             
             Return a JSON array of objects with these keys:
-            - unit: The unit name or number
-            - lesson: The lesson name or number
-            - topic: The specific topic name
+            - unit: The unit name or number (e.g., "Unit 1: Geometry")
+            - lesson: The lesson name or number (e.g., "Lesson 1.1: Triangles")
+            - topic: The specific topic name (e.g., "Types of Triangles")
             - content: A detailed summary of the content for this topic (in the detected language)
             - goals: The learning objectives for this topic (in the detected language)`,
           },
@@ -59,13 +62,14 @@ export async function parseBookPDF(pdfBase64: string): Promise<Partial<BookConte
   }
 }
 
-export async function generatePlanFromContent(content: BookContent, subject: string, className: string): Promise<LessonPlan> {
+export async function generatePlanFromContent(content: BookContent, subject: string, className: string, targetLanguage: string = 'English'): Promise<LessonPlan> {
   const response = await ai.models.generateContent({
     model: "gemini-3-flash-preview",
     contents: [
       {
         text: `Based on the following textbook content, generate a detailed lesson plan.
-        IMPORTANT: Use the SAME language as the provided content (e.g., if content is in Nepali, generate the plan in Nepali).
+        IMPORTANT: Generate the entire lesson plan in ${targetLanguage}. 
+        If the source content is in another language, translate the concepts accurately into ${targetLanguage}.
         
         SUBJECT: ${subject}
         CLASS: ${className}
