@@ -92,31 +92,32 @@ export async function generatePlanFromContent(content: BookContent, subject: str
         - Period (40-45 mins)
         - Objectives (Learning Outcomes)
         - Warm up & Review
-        - Learning Activities (at least 4 steps. For Mathematics, include specific problem-solving steps or examples)
-        - Evaluation Activities (at least 4 items. For Mathematics, include practice problems)
-        - Class Work (Summary text)
-        - Home Assignment (Summary text)
+        - Teaching Activities (at least 5 steps)
+        - Evaluation (at least 5 items)
+        - Class Work (list of tasks)
+        - Home Assignment (list of tasks)
+        - Remarks (any additional teacher notes)
         - Principal Remarks (leave empty or generic)
-        - Notes (any additional teacher notes)
 
         Return as a JSON object matching this schema:
         {
           "subject": string,
           "class": string,
-          "grade": string,
           "chapter": string,
+          "unit": string,
           "period": string,
-          "topic": string,
+          "lesson_topic": string,
           "objectives": string,
+          "learning_outcomes": string,
           "warm_up_review": string,
+          "teaching_activities": string[],
           "learning_activities": string[],
+          "evaluation": string[],
           "evaluation_activities": string[],
-          "class_work": string,
-          "home_assignment": string,
-          "principal_remarks": string,
-          "notes": string,
-          "title": string,
-          "description": string
+          "class_work": string[],
+          "home_assignment": string[],
+          "remarks": string,
+          "principal_remarks": string
         }`,
       },
     ],
@@ -127,13 +128,22 @@ export async function generatePlanFromContent(content: BookContent, subject: str
         properties: {
           subject: { type: Type.STRING },
           class: { type: Type.STRING },
-          grade: { type: Type.STRING },
           chapter: { type: Type.STRING },
+          unit: { type: Type.STRING },
           period: { type: Type.STRING },
-          topic: { type: Type.STRING },
+          lesson_topic: { type: Type.STRING },
           objectives: { type: Type.STRING },
+          learning_outcomes: { type: Type.STRING },
           warm_up_review: { type: Type.STRING },
+          teaching_activities: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING }
+          },
           learning_activities: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING }
+          },
+          evaluation: {
             type: Type.ARRAY,
             items: { type: Type.STRING }
           },
@@ -141,16 +151,20 @@ export async function generatePlanFromContent(content: BookContent, subject: str
             type: Type.ARRAY,
             items: { type: Type.STRING }
           },
-          class_work: { type: Type.STRING },
-          home_assignment: { type: Type.STRING },
-          principal_remarks: { type: Type.STRING },
-          notes: { type: Type.STRING },
-          title: { type: Type.STRING },
-          description: { type: Type.STRING }
+          class_work: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING }
+          },
+          home_assignment: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING }
+          },
+          remarks: { type: Type.STRING },
+          principal_remarks: { type: Type.STRING }
         },
         required: [
-          "subject", "class", "topic", "objectives", "warm_up_review", 
-          "learning_activities", "evaluation_activities", "class_work", "home_assignment"
+          "subject", "class", "lesson_topic", "objectives", "warm_up_review", 
+          "teaching_activities", "evaluation", "class_work", "home_assignment"
         ]
       }
     },
@@ -161,15 +175,138 @@ export async function generatePlanFromContent(content: BookContent, subject: str
     return { 
       ...plan, 
       book_content_id: content.id,
-      content: content.content, // Include the original content summary
-      status: 'draft',
       center_id: '00000000-0000-0000-0000-000000000000', // Placeholder
-      teacher_id: null, // Placeholder
-      updated_at: new Date().toISOString()
+      teacher_id: '00000000-0000-0000-0000-000000000000', // Placeholder
     };
   } catch (e) {
     console.error("Failed to parse Gemini response", e);
     throw new Error("Failed to generate lesson plan");
+  }
+}
+
+export async function generatePlanFromPDFAndTopic(pdfBase64: string, content: BookContent, subject: string, className: string, targetLanguage: string = 'English'): Promise<LessonPlan> {
+  const response = await ai.models.generateContent({
+    model: "gemini-3-flash-preview",
+    contents: [
+      {
+        parts: [
+          {
+            inlineData: {
+              mimeType: "application/pdf",
+              data: pdfBase64,
+            },
+          },
+          {
+            text: `Study the provided textbook PDF and generate a detailed lesson plan for the specific topic below.
+            IMPORTANT: Generate the entire lesson plan in ${targetLanguage}. 
+            
+            SUBJECT: ${subject}
+            CLASS: ${className}
+            UNIT: ${content.unit}
+            CHAPTER: ${content.chapter || ''}
+            LESSON: ${content.lesson}
+            TOPIC: ${content.topic}
+            
+            Instructions:
+            1. Find the relevant section in the PDF for this topic.
+            2. Use the actual text, examples, and exercises from the PDF to create a high-quality lesson plan.
+            3. If this is a Mathematics book, include specific practice problems and step-by-step solutions from the text.
+            
+            Generate a lesson plan with:
+            - Period (40-45 mins)
+            - Objectives (Learning Outcomes)
+            - Warm up & Review
+            - Teaching Activities (at least 5 steps)
+            - Evaluation (at least 5 items)
+            - Class Work (list of tasks)
+            - Home Assignment (list of tasks)
+            - Remarks (any additional teacher notes)
+            - Principal Remarks (leave empty or generic)
+
+            Return as a JSON object matching this schema:
+            {
+              "subject": string,
+              "class": string,
+              "chapter": string,
+              "unit": string,
+              "period": string,
+              "lesson_topic": string,
+              "objectives": string,
+              "learning_outcomes": string,
+              "warm_up_review": string,
+              "teaching_activities": string[],
+              "learning_activities": string[],
+              "evaluation": string[],
+              "evaluation_activities": string[],
+              "class_work": string[],
+              "home_assignment": string[],
+              "remarks": string,
+              "principal_remarks": string
+            }`,
+          },
+        ],
+      },
+    ],
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          subject: { type: Type.STRING },
+          class: { type: Type.STRING },
+          chapter: { type: Type.STRING },
+          unit: { type: Type.STRING },
+          period: { type: Type.STRING },
+          lesson_topic: { type: Type.STRING },
+          objectives: { type: Type.STRING },
+          learning_outcomes: { type: Type.STRING },
+          warm_up_review: { type: Type.STRING },
+          teaching_activities: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING }
+          },
+          learning_activities: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING }
+          },
+          evaluation: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING }
+          },
+          evaluation_activities: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING }
+          },
+          class_work: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING }
+          },
+          home_assignment: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING }
+          },
+          remarks: { type: Type.STRING },
+          principal_remarks: { type: Type.STRING }
+        },
+        required: [
+          "subject", "class", "lesson_topic", "objectives", "warm_up_review", 
+          "teaching_activities", "evaluation", "class_work", "home_assignment"
+        ]
+      }
+    },
+  });
+
+  try {
+    const plan = JSON.parse(response.text || "{}");
+    return { 
+      ...plan, 
+      book_content_id: content.id,
+      center_id: '00000000-0000-0000-0000-000000000000', // Placeholder
+      teacher_id: '00000000-0000-0000-0000-000000000000', // Placeholder
+    };
+  } catch (e) {
+    console.error("Failed to parse Gemini response", e);
+    throw new Error("Failed to generate lesson plan from PDF");
   }
 }
 

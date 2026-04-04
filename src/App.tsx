@@ -4,15 +4,15 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Upload, FileText, Loader2, Save, CheckCircle2, AlertCircle, ChevronDown, ChevronUp, Printer, BookOpen, Sparkles, List, GraduationCap, Book as BookIcon, Folder, RefreshCw, Trash2 } from 'lucide-react';
+import { Upload, FileText, Loader2, Save, CheckCircle2, AlertCircle, ChevronDown, ChevronUp, Printer, BookOpen, Sparkles, List, GraduationCap, Book as BookIcon, Folder, RefreshCw, Trash2, Eye } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { parseBookPDF, generatePlanFromContent } from './services/geminiService';
+import { parseBookPDF, generatePlanFromContent, generatePlanFromPDFAndTopic } from './services/geminiService';
 import { getSupabase } from './lib/supabase';
 import { LessonPlan, Book, BookContent } from './types';
 import { cn } from './lib/utils';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'upload' | 'analyze' | 'books' | 'generator' | 'history'>('upload');
+  const [activeTab, setActiveTab] = useState<'upload' | 'analyze' | 'books' | 'generator' | 'lesson-plans'>('upload');
   const [file, setFile] = useState<File | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -37,6 +37,11 @@ export default function App() {
   const [selectedTopic, setSelectedTopic] = useState<BookContent | null>(null);
   const [targetLanguage, setTargetLanguage] = useState<string>('English');
   const [viewingPdfUrl, setViewingPdfUrl] = useState<string | null>(null);
+  const [viewingPlan, setViewingPlan] = useState<LessonPlan | null>(null);
+
+  // Filters for Lesson Plans tab
+  const [filterGrade, setFilterGrade] = useState<string>('');
+  const [filterSubject, setFilterSubject] = useState<string>('');
 
   // Plans Data
   const [currentPlan, setCurrentPlan] = useState<LessonPlan | null>(null);
@@ -54,7 +59,10 @@ export default function App() {
   const fetchAllBooks = async () => {
     try {
       const supabase = getSupabase();
-      const { data, error } = await supabase.from('books').select('*').order('class', { ascending: true });
+      const { data, error } = await supabase
+        .from('books')
+        .select('id, title, subject, class, file_path, created_at')
+        .order('class', { ascending: true });
       if (error) throw error;
       setAllBooks(data || []);
     } catch (err) {
@@ -125,7 +133,7 @@ export default function App() {
       const supabase = getSupabase();
       const { data, error } = await supabase
         .from('books')
-        .select('*')
+        .select('id, title, subject, class, file_path, created_at')
         .eq('class', grade)
         .eq('subject', subject);
       
@@ -141,7 +149,7 @@ export default function App() {
       const supabase = getSupabase();
       const { data, error } = await supabase
         .from('book_contents')
-        .select('*')
+        .select('id, book_id, unit, chapter, lesson, topic, sub_topic, content, goals, created_at')
         .eq('book_id', bookId)
         .order('created_at', { ascending: true });
       
@@ -155,7 +163,34 @@ export default function App() {
   const fetchHistory = async () => {
     try {
       const supabase = getSupabase();
-      const { data, error } = await supabase.from('lesson_plans').select('*').order('created_at', { ascending: false });
+      const { data, error } = await supabase
+        .from('lesson_plans')
+        .select(`
+          id, 
+          book_content_id, 
+          subject, 
+          class, 
+          unit, 
+          period, 
+          lesson_topic, 
+          date, 
+          learning_outcomes, 
+          warm_up_review, 
+          teaching_activities, 
+          evaluation, 
+          class_work, 
+          home_assignment, 
+          remarks, 
+          created_at, 
+          center_id, 
+          teacher_id, 
+          objectives, 
+          learning_activities, 
+          evaluation_activities, 
+          principal_remarks, 
+          chapter
+        `)
+        .order('created_at', { ascending: false });
       if (error) throw error;
       setPlanHistory(data || []);
     } catch (err) {
@@ -449,7 +484,31 @@ export default function App() {
       
       const { data: existingPlan, error: fetchError } = await supabase
         .from('lesson_plans')
-        .select('*')
+        .select(`
+          id, 
+          book_content_id, 
+          subject, 
+          class, 
+          unit, 
+          period, 
+          lesson_topic, 
+          date, 
+          learning_outcomes, 
+          warm_up_review, 
+          teaching_activities, 
+          evaluation, 
+          class_work, 
+          home_assignment, 
+          remarks, 
+          created_at, 
+          center_id, 
+          teacher_id, 
+          objectives, 
+          learning_activities, 
+          evaluation_activities, 
+          principal_remarks, 
+          chapter
+        `)
         .eq('book_content_id', content.id)
         .maybeSingle();
 
@@ -468,19 +527,46 @@ export default function App() {
         }
       }
 
-      const plan = await generatePlanFromContent(content, selectedSubject, selectedGrade, targetLanguage);
+      let plan: LessonPlan;
+
+      if (forceRegenerate && selectedBook?.file_path) {
+        // "Study the document and regenerate"
+        const { data: pdfBlob, error: downloadError } = await supabase.storage
+          .from('books')
+          .download(selectedBook.file_path);
+        
+        if (downloadError) throw downloadError;
+
+        const reader = new FileReader();
+        const pdfBase64 = await new Promise<string>((resolve, reject) => {
+          reader.onload = () => resolve((reader.result as string).split(',')[1]);
+          reader.onerror = reject;
+          reader.readAsDataURL(pdfBlob);
+        });
+
+        plan = await generatePlanFromPDFAndTopic(pdfBase64, content, selectedSubject, selectedGrade, targetLanguage);
+      } else {
+        plan = await generatePlanFromContent(content, selectedSubject, selectedGrade, targetLanguage);
+      }
       
       // Add metadata for the external system integration
       const planWithMetadata = {
         ...plan,
         center_id: '00000000-0000-0000-0000-000000000000', // Placeholder UUID
-        teacher_id: null, // Placeholder
+        teacher_id: '00000000-0000-0000-0000-000000000000', // Placeholder
         book_content_id: content.id,
-        grade: selectedGrade,
-        class: selectedGrade, // Use grade as class if not specified
+        class: selectedGrade,
         subject: selectedSubject,
-        updated_at: new Date().toISOString()
+        date: new Date().toLocaleDateString()
       };
+
+      // CRITICAL: Remove fields that don't exist in the database schema
+      const fieldsToRemove = ['content', 'description', 'title', 'grade', 'status', 'updated_at', 'notes'];
+      fieldsToRemove.forEach(field => {
+        if (field in planWithMetadata) {
+          delete (planWithMetadata as any)[field];
+        }
+      });
 
       if (existingPlan) {
         const { data: updatedPlan, error: updateError } = await supabase
@@ -534,10 +620,16 @@ export default function App() {
     const printWindow = window.open('', '_blank');
     if (!printWindow) return;
 
+    const topic = plan.lesson_topic || (plan as any).topic;
+    const objectives = plan.learning_outcomes || plan.objectives;
+    const activities = plan.teaching_activities || plan.learning_activities || [];
+    const evaluation = plan.evaluation || plan.evaluation_activities || [];
+    const remarks = plan.principal_remarks || plan.remarks;
+
     const content = `
       <html>
         <head>
-          <title>Lesson Plan - ${plan.topic}</title>
+          <title>Lesson Plan - ${topic}</title>
           <style>
             body { font-family: sans-serif; padding: 40px; color: #333; line-height: 1.5; }
             .header { border: 2px solid #000; display: grid; grid-template-columns: 1fr 1fr; margin-bottom: 20px; }
@@ -555,24 +647,35 @@ export default function App() {
             <div class="header-item"><strong>Subject:</strong> ${plan.subject}</div>
             <div class="header-item"><strong>Class:</strong> ${plan.class}</div>
             <div class="header-item"><strong>Chapter:</strong> ${plan.chapter || ''}</div>
-            <div class="header-item"><strong>Period:</strong> ${plan.period}</div>
-            <div class="header-item" style="grid-column: span 2;"><strong>Topic:</strong> ${plan.topic}</div>
-            <div class="header-item" style="grid-column: span 2;"><strong>Date:</strong> ${plan.lesson_date || plan.planned_date || '_________'}</div>
+            <div class="header-item"><strong>Period:</strong> ${plan.period || ''}</div>
+            <div class="header-item" style="grid-column: span 2;"><strong>Topic:</strong> ${topic}</div>
+            <div class="header-item" style="grid-column: span 2;"><strong>Date:</strong> ${plan.date || '_________'}</div>
           </div>
-          <div class="section"><div class="section-title">1. Objectives:</div><p>${plan.objectives}</p></div>
+          <div class="section"><div class="section-title">1. Objectives / Learning Outcomes:</div><p>${objectives}</p></div>
           <div class="section"><div class="section-title">2. Warm up & Review:</div><p>${plan.warm_up_review}</p></div>
-          <div class="section"><div class="section-title">3. Learning Activities:</div><ol type="a">${(plan.learning_activities || []).map(act => `<li>${act}</li>`).join('')}</ol></div>
-          <div class="section"><div class="section-title">4. Evaluation Activities:</div><ol type="a">${(plan.evaluation_activities || []).map(ev => `<li>${ev}</li>`).join('')}</ol></div>
-          <div class="section"><div class="section-title">5. Assignments:</div><div class="grid"><div><strong>Class Work:</strong><p>${plan.class_work || ''}</p></div><div><strong>Home Assignment:</strong><p>${plan.home_assignment || ''}</p></div></div></div>
-          <div class="section"><div class="section-title">6. Teacher Notes:</div><p>${plan.notes || ''}</p></div>
-          <div class="section"><div class="section-title">7. Remarks:</div><p>${plan.principal_remarks || '________________________________________________'}</p></div>
-          <div style="margin-top: 50px; display: flex; justify-content: space-between;"><div>_______________________<br>Subject Teacher's Signature</div><div>_______________________<br>Principal's Signature</div></div>
+          <div class="section"><div class="section-title">3. Teaching & Learning Activities:</div><ol type="a">${activities.map(act => `<li>${act}</li>`).join('')}</ol></div>
+          <div class="section"><div class="section-title">4. Evaluation:</div><ol type="a">${evaluation.map(ev => `<li>${ev}</li>`).join('')}</ol></div>
+          <div class="grid">
+            <div class="section">
+              <div class="section-title">Class Work:</div>
+              <ul>${Array.isArray(plan.class_work) ? plan.class_work.map(item => `<li>${item}</li>`).join('') : `<li>${plan.class_work || ''}</li>`}</ul>
+            </div>
+            <div class="section">
+              <div class="section-title">Home Assignment:</div>
+              <ul>${Array.isArray(plan.home_assignment) ? plan.home_assignment.map(item => `<li>${item}</li>`).join('') : `<li>${plan.home_assignment || ''}</li>`}</ul>
+            </div>
+          </div>
+          ${remarks ? `<div class="section"><div class="section-title">Remarks:</div><p><i>${remarks}</i></p></div>` : ''}
+          <div style="margin-top: 50px; display: flex; justify-content: space-between;">
+            <div>____________________<br>Teacher's Signature</div>
+            <div>____________________<br>Principal's Signature</div>
+          </div>
+          <script>window.onload = () => { window.print(); window.close(); }</script>
         </body>
       </html>
     `;
     printWindow.document.write(content);
     printWindow.document.close();
-    printWindow.print();
   };
 
   return (
@@ -587,7 +690,7 @@ export default function App() {
             <button onClick={() => setActiveTab('upload')} className={cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", (activeTab === 'upload' || activeTab === 'analyze') ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Upload</button>
             <button onClick={() => setActiveTab('books')} className={cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", activeTab === 'books' ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Books</button>
             <button onClick={() => setActiveTab('generator')} className={cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", activeTab === 'generator' ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Generator</button>
-            <button onClick={() => setActiveTab('history')} className={cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", activeTab === 'history' ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>History</button>
+            <button onClick={() => setActiveTab('lesson-plans')} className={cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", activeTab === 'lesson-plans' ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Lesson Plans</button>
           </nav>
         </div>
       </header>
@@ -948,16 +1051,25 @@ export default function App() {
               {isGenerating ? (
                 <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex flex-col items-center justify-center py-20 bg-white rounded-2xl border border-slate-200 border-dashed">
                   <Loader2 className="w-12 h-12 text-indigo-600 animate-spin mb-4" />
-                  <p className="text-slate-500 font-medium">Generating your lesson plan from database content...</p>
+                  <p className="text-slate-500 font-medium">
+                    {selectedBook?.file_path ? "Studying PDF document and generating lesson plan..." : "Generating your lesson plan from database content..."}
+                  </p>
                 </motion.div>
               ) : currentPlan ? (
                 <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-lg">
                   <div className="bg-indigo-600 px-8 py-6 flex items-center justify-between text-white">
                     <div>
-                      <h3 className="text-2xl font-bold">{currentPlan.topic}</h3>
+                      <h3 className="text-2xl font-bold">{currentPlan.lesson_topic || (currentPlan as any).topic}</h3>
                       <p className="opacity-80">{currentPlan.subject} • Grade {currentPlan.class}</p>
                     </div>
                     <div className="flex gap-3">
+                      <button 
+                        onClick={() => selectedTopic && handleAutoGenerate(selectedTopic, true)} 
+                        className="bg-white/10 hover:bg-white/20 p-2 rounded-lg transition-all flex items-center gap-2 text-sm font-medium" 
+                        title="Study PDF and Regenerate"
+                      >
+                        <RefreshCw className="w-4 h-4" /> Regenerate
+                      </button>
                       <button onClick={savePlan} className="bg-white/10 hover:bg-white/20 p-2 rounded-lg transition-all" title="Save to History"><Save className="w-5 h-5" /></button>
                       <button onClick={() => printPlan(currentPlan)} className="bg-white/10 hover:bg-white/20 p-2 rounded-lg transition-all" title="Print Plan"><Printer className="w-5 h-5" /></button>
                     </div>
@@ -965,21 +1077,71 @@ export default function App() {
                   
                   <div className="p-8 grid grid-cols-1 md:grid-cols-2 gap-10">
                     <div className="space-y-8">
-                      <div><h5 className="text-xs font-bold text-indigo-600 uppercase tracking-widest mb-3">1. Objectives</h5><p className="text-slate-700 leading-relaxed bg-slate-50 p-4 rounded-xl border border-slate-100">{currentPlan.objectives}</p></div>
-                      <div><h5 className="text-xs font-bold text-indigo-600 uppercase tracking-widest mb-3">2. Warm up & Review</h5><p className="text-slate-700 leading-relaxed bg-slate-50 p-4 rounded-xl border border-slate-100">{currentPlan.warm_up_review}</p></div>
-                      <div><h5 className="text-xs font-bold text-indigo-600 uppercase tracking-widest mb-3">3. Learning Activities</h5><ul className="space-y-3">{(currentPlan.learning_activities || []).map((act, i) => (<li key={i} className="flex gap-4 text-slate-700 p-3 bg-white border border-slate-100 rounded-lg shadow-sm"><span className="text-indigo-600 font-bold">{String.fromCharCode(97 + i)}.</span>{act}</li>))}</ul></div>
+                      <div>
+                        <h5 className="text-xs font-bold text-indigo-600 uppercase tracking-widest mb-3">1. Objectives / Learning Outcomes</h5>
+                        <p className="text-slate-700 leading-relaxed bg-slate-50 p-4 rounded-xl border border-slate-100">
+                          {currentPlan.learning_outcomes || currentPlan.objectives}
+                        </p>
+                      </div>
+                      <div>
+                        <h5 className="text-xs font-bold text-indigo-600 uppercase tracking-widest mb-3">2. Warm up & Review</h5>
+                        <p className="text-slate-700 leading-relaxed bg-slate-50 p-4 rounded-xl border border-slate-100">{currentPlan.warm_up_review}</p>
+                      </div>
+                      <div>
+                        <h5 className="text-xs font-bold text-indigo-600 uppercase tracking-widest mb-3">3. Teaching & Learning Activities</h5>
+                        <ul className="space-y-3">
+                          {(currentPlan.teaching_activities || currentPlan.learning_activities || []).map((act, i) => (
+                            <li key={i} className="flex gap-4 text-slate-700 p-3 bg-white border border-slate-100 rounded-lg shadow-sm">
+                              <span className="text-indigo-600 font-bold">{String.fromCharCode(97 + i)}.</span>{act}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
                     </div>
                     <div className="space-y-8">
-                      <div><h5 className="text-xs font-bold text-indigo-600 uppercase tracking-widest mb-3">4. Evaluation Activities</h5><ul className="space-y-3">{(currentPlan.evaluation_activities || []).map((ev, i) => (<li key={i} className="flex gap-4 text-slate-700 p-3 bg-white border border-slate-100 rounded-lg shadow-sm"><span className="text-indigo-600 font-bold">{String.fromCharCode(97 + i)}.</span>{ev}</li>))}</ul></div>
+                      <div>
+                        <h5 className="text-xs font-bold text-indigo-600 uppercase tracking-widest mb-3">4. Evaluation</h5>
+                        <ul className="space-y-3">
+                          {(currentPlan.evaluation || currentPlan.evaluation_activities || []).map((ev, i) => (
+                            <li key={i} className="flex gap-4 text-slate-700 p-3 bg-white border border-slate-100 rounded-lg shadow-sm">
+                              <span className="text-indigo-600 font-bold">{String.fromCharCode(97 + i)}.</span>{ev}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
                       <div>
                         <h5 className="text-xs font-bold text-indigo-600 uppercase tracking-widest mb-3">5. Assignments</h5>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                          <div className="bg-slate-50 p-5 rounded-2xl border border-slate-100"><h6 className="font-bold text-slate-800 text-sm mb-3 border-b border-slate-200 pb-2">Class Work</h6><p className="text-sm text-slate-600">{currentPlan.class_work}</p></div>
-                          <div className="bg-slate-50 p-5 rounded-2xl border border-slate-100"><h6 className="font-bold text-slate-800 text-sm mb-3 border-b border-slate-200 pb-2">Home Assignment</h6><p className="text-sm text-slate-600">{currentPlan.home_assignment}</p></div>
+                          <div className="bg-slate-50 p-5 rounded-2xl border border-slate-100">
+                            <h6 className="font-bold text-slate-800 text-sm mb-3 border-b border-slate-200 pb-2">Class Work</h6>
+                            <div className="text-sm text-slate-600 space-y-1">
+                              {Array.isArray(currentPlan.class_work) ? (
+                                currentPlan.class_work.map((item, i) => <p key={i}>• {item}</p>)
+                              ) : (
+                                <p>{currentPlan.class_work}</p>
+                              )}
+                            </div>
+                          </div>
+                          <div className="bg-slate-50 p-5 rounded-2xl border border-slate-100">
+                            <h6 className="font-bold text-slate-800 text-sm mb-3 border-b border-slate-200 pb-2">Home Assignment</h6>
+                            <div className="text-sm text-slate-600 space-y-1">
+                              {Array.isArray(currentPlan.home_assignment) ? (
+                                currentPlan.home_assignment.map((item, i) => <p key={i}>• {item}</p>)
+                              ) : (
+                                <p>{currentPlan.home_assignment}</p>
+                              )}
+                            </div>
+                          </div>
                         </div>
                       </div>
-                      {currentPlan.principal_remarks && (<div><h5 className="text-xs font-bold text-indigo-600 uppercase tracking-widest mb-3">Principal Remarks</h5><p className="text-slate-600 italic text-sm bg-slate-50 p-4 rounded-xl border border-slate-100">{currentPlan.principal_remarks}</p></div>)}
-                      {currentPlan.notes && (<div><h5 className="text-xs font-bold text-indigo-600 uppercase tracking-widest mb-3">Teacher Notes</h5><p className="text-slate-600 text-sm bg-slate-50 p-4 rounded-xl border border-slate-100">{currentPlan.notes}</p></div>)}
+                      {(currentPlan.principal_remarks || currentPlan.remarks) && (
+                        <div>
+                          <h5 className="text-xs font-bold text-indigo-600 uppercase tracking-widest mb-3">Remarks</h5>
+                          <p className="text-slate-600 italic text-sm bg-slate-50 p-4 rounded-xl border border-slate-100">
+                            {currentPlan.principal_remarks || currentPlan.remarks}
+                          </p>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </motion.div>
@@ -993,28 +1155,172 @@ export default function App() {
           </section>
         )}
 
-        {activeTab === 'history' && (
-          <div className="space-y-4">
-            <h3 className="text-xl font-bold text-slate-800 mb-6">Saved Lesson Plans ({planHistory.length})</h3>
-            {planHistory.map((plan, idx) => (
-              <div key={`history-item-${plan.id}-${idx}`} className="bg-white rounded-xl border border-slate-200 p-6 flex items-center justify-between shadow-sm hover:shadow-md transition-all">
-                <div>
-                  <h4 className="font-bold text-slate-800 text-lg">{plan.topic}</h4>
-                  <p className="text-xs text-slate-500 uppercase font-semibold tracking-wider">{plan.subject} • Grade {plan.class} • {plan.chapter}</p>
-                </div>
-                <div className="flex gap-2">
-                  <button onClick={() => printPlan(plan)} className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"><Printer className="w-5 h-5" /></button>
-                </div>
+        {activeTab === 'lesson-plans' && (
+          <div className="space-y-6">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <h3 className="text-2xl font-bold text-slate-800">Saved Lesson Plans</h3>
+              
+              <div className="flex flex-wrap gap-3">
+                <select 
+                  value={filterGrade} 
+                  onChange={e => setFilterGrade(e.target.value)}
+                  className="px-4 py-2 bg-white border border-slate-200 rounded-xl text-sm font-medium focus:ring-2 focus:ring-indigo-500 outline-none"
+                >
+                  <option value="">All Grades</option>
+                  {Array.from(new Set(planHistory.map(p => p.class))).filter(Boolean).sort().map(g => (
+                    <option key={`filter-g-${g}`} value={g}>Grade {g}</option>
+                  ))}
+                </select>
+                
+                <select 
+                  value={filterSubject} 
+                  onChange={e => setFilterSubject(e.target.value)}
+                  className="px-4 py-2 bg-white border border-slate-200 rounded-xl text-sm font-medium focus:ring-2 focus:ring-indigo-500 outline-none"
+                >
+                  <option value="">All Subjects</option>
+                  {Array.from(new Set(planHistory.map(p => p.subject))).filter(Boolean).sort().map(s => (
+                    <option key={`filter-s-${s}`} value={s}>{s}</option>
+                  ))}
+                </select>
               </div>
-            ))}
-            {planHistory.length === 0 && (
-              <div className="text-center py-20 bg-white rounded-2xl border border-slate-200 border-dashed">
-                <FileText className="w-12 h-12 text-slate-200 mx-auto mb-4" />
-                <p className="text-slate-400">No saved plans found.</p>
-              </div>
-            )}
+            </div>
+
+            <div className="space-y-4">
+              {planHistory
+                .filter(p => (!filterGrade || p.class === filterGrade) && (!filterSubject || p.subject === filterSubject))
+                .map((plan, idx) => (
+                  <div key={`history-item-${plan.id}-${idx}`} className="bg-white rounded-xl border border-slate-200 p-6 flex items-center justify-between shadow-sm hover:shadow-md transition-all">
+                    <div>
+                      <h4 className="font-bold text-slate-800 text-lg">{plan.lesson_topic || (plan as any).topic}</h4>
+                      <p className="text-xs text-slate-500 uppercase font-semibold tracking-wider">{plan.subject} • Grade {plan.class} • {plan.chapter}</p>
+                    </div>
+                    <div className="flex gap-2">
+                      <button onClick={() => setViewingPlan(plan)} className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all" title="View Plan">
+                        <Eye className="w-5 h-5" />
+                      </button>
+                      <button onClick={() => printPlan(plan)} className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all" title="Print Plan">
+                        <Printer className="w-5 h-5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              
+              {planHistory.length === 0 && (
+                <div className="text-center py-20 bg-white rounded-2xl border border-slate-200 border-dashed">
+                  <FileText className="w-12 h-12 text-slate-200 mx-auto mb-4" />
+                  <p className="text-slate-400">No lesson plans generated yet.</p>
+                </div>
+              )}
+            </div>
           </div>
         )}
+        {/* Plan Viewer Modal */}
+        <AnimatePresence>
+          {viewingPlan && (
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[100] flex items-center justify-center p-4 overflow-y-auto"
+              onClick={() => setViewingPlan(null)}
+            >
+              <motion.div 
+                initial={{ scale: 0.95, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.95, opacity: 0 }}
+                className="bg-white rounded-3xl w-full max-w-4xl my-8 overflow-hidden flex flex-col shadow-2xl"
+                onClick={e => e.stopPropagation()}
+              >
+                <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-indigo-600 text-white">
+                  <div>
+                    <h3 className="text-2xl font-bold">{viewingPlan.lesson_topic || (viewingPlan as any).topic}</h3>
+                    <p className="opacity-80">{viewingPlan.subject} • Grade {viewingPlan.class}</p>
+                  </div>
+                  <div className="flex gap-3">
+                    <button onClick={() => printPlan(viewingPlan)} className="bg-white/10 hover:bg-white/20 p-2 rounded-lg transition-all" title="Print Plan"><Printer className="w-5 h-5" /></button>
+                    <button 
+                      onClick={() => setViewingPlan(null)}
+                      className="p-2 bg-white/10 hover:bg-white/20 rounded-lg transition-all"
+                    >
+                      <ChevronDown className="w-6 h-6" />
+                    </button>
+                  </div>
+                </div>
+                
+                <div className="p-8 grid grid-cols-1 md:grid-cols-2 gap-10 overflow-y-auto max-h-[70vh] custom-scrollbar">
+                  <div className="space-y-8">
+                    <div>
+                      <h5 className="text-xs font-bold text-indigo-600 uppercase tracking-widest mb-3">1. Objectives / Learning Outcomes</h5>
+                      <p className="text-slate-700 leading-relaxed bg-slate-50 p-4 rounded-xl border border-slate-100">
+                        {viewingPlan.learning_outcomes || viewingPlan.objectives}
+                      </p>
+                    </div>
+                    <div>
+                      <h5 className="text-xs font-bold text-indigo-600 uppercase tracking-widest mb-3">2. Warm up & Review</h5>
+                      <p className="text-slate-700 leading-relaxed bg-slate-50 p-4 rounded-xl border border-slate-100">{viewingPlan.warm_up_review}</p>
+                    </div>
+                    <div>
+                      <h5 className="text-xs font-bold text-indigo-600 uppercase tracking-widest mb-3">3. Teaching & Learning Activities</h5>
+                      <ul className="space-y-3">
+                        {(viewingPlan.teaching_activities || viewingPlan.learning_activities || []).map((act, i) => (
+                          <li key={i} className="flex gap-4 text-slate-700 p-3 bg-white border border-slate-100 rounded-lg shadow-sm">
+                            <span className="text-indigo-600 font-bold">{String.fromCharCode(97 + i)}.</span>{act}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                  <div className="space-y-8">
+                    <div>
+                      <h5 className="text-xs font-bold text-indigo-600 uppercase tracking-widest mb-3">4. Evaluation</h5>
+                      <ul className="space-y-3">
+                        {(viewingPlan.evaluation || viewingPlan.evaluation_activities || []).map((ev, i) => (
+                          <li key={i} className="flex gap-4 text-slate-700 p-3 bg-white border border-slate-100 rounded-lg shadow-sm">
+                            <span className="text-indigo-600 font-bold">{String.fromCharCode(97 + i)}.</span>{ev}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                    <div>
+                      <h5 className="text-xs font-bold text-indigo-600 uppercase tracking-widest mb-3">5. Assignments</h5>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div className="bg-slate-50 p-5 rounded-2xl border border-slate-100">
+                          <h6 className="font-bold text-slate-800 text-sm mb-3 border-b border-slate-200 pb-2">Class Work</h6>
+                          <div className="text-sm text-slate-600 space-y-1">
+                            {Array.isArray(viewingPlan.class_work) ? (
+                              viewingPlan.class_work.map((item, i) => <p key={i}>• {item}</p>)
+                            ) : (
+                              <p>{viewingPlan.class_work}</p>
+                            )}
+                          </div>
+                        </div>
+                        <div className="bg-slate-50 p-5 rounded-2xl border border-slate-100">
+                          <h6 className="font-bold text-slate-800 text-sm mb-3 border-b border-slate-200 pb-2">Home Assignment</h6>
+                          <div className="text-sm text-slate-600 space-y-1">
+                            {Array.isArray(viewingPlan.home_assignment) ? (
+                              viewingPlan.home_assignment.map((item, i) => <p key={i}>• {item}</p>)
+                            ) : (
+                              <p>{viewingPlan.home_assignment}</p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    {(viewingPlan.principal_remarks || viewingPlan.remarks) && (
+                      <div>
+                        <h5 className="text-xs font-bold text-indigo-600 uppercase tracking-widest mb-3">Remarks</h5>
+                        <p className="text-slate-600 italic text-sm bg-slate-50 p-4 rounded-xl border border-slate-100">
+                          {viewingPlan.principal_remarks || viewingPlan.remarks}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         {/* PDF Viewer Modal */}
         <AnimatePresence>
           {viewingPdfUrl && (
