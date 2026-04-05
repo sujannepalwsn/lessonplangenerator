@@ -20,6 +20,21 @@ export interface BookContent {
   created_at?: string;
 }
 
+export interface BookReaderContent {
+  id?: string;
+  book_id: string;
+  unit: string;
+  chapter?: string;
+  lesson: string;
+  topic: string;
+  sub_topic?: string;
+  full_content: string; // High-fidelity content for the reader
+  key_points: string[];
+  examples: string[];
+  formulas?: string[];
+  created_at?: string;
+}
+
 export interface LessonPlan {
   id?: string;
   book_content_id?: string;

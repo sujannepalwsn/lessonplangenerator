@@ -5,11 +5,11 @@
 
 import React, { useState, useEffect } from 'react';
 import { Routes, Route, Link, NavLink, useNavigate, useLocation, Navigate } from 'react-router-dom';
-import { Upload, FileText, Loader2, Save, CheckCircle2, AlertCircle, ChevronDown, ChevronUp, Printer, BookOpen, Sparkles, List, GraduationCap, Book as BookIcon, Folder, RefreshCw, Trash2, Eye, Copy, Search, X, Menu } from 'lucide-react';
+import { Upload, FileText, Loader2, Save, CheckCircle2, AlertCircle, ChevronDown, ChevronUp, Printer, BookOpen, Sparkles, List, GraduationCap, Book as BookIcon, Folder, RefreshCw, Trash2, Eye, Copy, Search, X, Menu, Link as LinkIcon, ChevronLeft, ChevronRight } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { parseBookPDF, generatePlanFromContent, generatePlanFromPDFAndTopic } from './services/geminiService';
+import { parseBookPDF, generatePlanFromContent, generatePlanFromPDFAndTopic, answerQuestionFromBook, searchBookContents, extractFullBookReaderContent } from './services/geminiService';
 import { getSupabase } from './lib/supabase';
-import { LessonPlan, Book, BookContent } from './types';
+import { LessonPlan, Book, BookContent, BookReaderContent } from './types';
 import { cn } from './lib/utils';
 
 export default function App() {
@@ -31,6 +31,9 @@ export default function App() {
   const [selectedBookToOverwrite, setSelectedBookToOverwrite] = useState<string>('');
   const [bookToAnalyze, setBookToAnalyze] = useState<Book | null>(null);
   const [parsedContents, setParsedContents] = useState<Partial<BookContent>[]>([]);
+  const [parsedReaderContents, setParsedReaderContents] = useState<Partial<BookReaderContent>[]>([]);
+  const [bookUrl, setBookUrl] = useState('');
+  const [currentReaderPageIndex, setCurrentReaderPageIndex] = useState(0);
   const [allBooks, setAllBooks] = useState<Book[]>([]);
   
   // Selector State
@@ -38,6 +41,7 @@ export default function App() {
   const [availableSubjects, setAvailableSubjects] = useState<string[]>([]);
   const [availableBooks, setAvailableBooks] = useState<Book[]>([]);
   const [availableTopics, setAvailableTopics] = useState<BookContent[]>([]);
+  const [availableReaderContents, setAvailableReaderContents] = useState<BookReaderContent[]>([]);
   
   const [selectedGrade, setSelectedGrade] = useState<string>('');
   const [selectedSubject, setSelectedSubject] = useState<string>('');
@@ -57,6 +61,14 @@ export default function App() {
   // Plans Data
   const [currentPlan, setCurrentPlan] = useState<LessonPlan | null>(null);
   const [planHistory, setPlanHistory] = useState<LessonPlan[]>([]);
+  
+  // Q&A State
+  const [qaQuestion, setQaQuestion] = useState('');
+  const [qaAnswer, setQaAnswer] = useState('');
+  const [isAnswering, setIsAnswering] = useState(false);
+  const [qaSearchResults, setQaSearchResults] = useState<BookContent[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -106,6 +118,9 @@ export default function App() {
       fetchTopics(selectedBook.id);
       setSelectedTopic(null);
       setCurrentPlan(null);
+      setQaQuestion('');
+      setQaAnswer('');
+      setCurrentReaderPageIndex(0);
     }
   }, [selectedBook]);
 
@@ -158,8 +173,26 @@ export default function App() {
         .eq('book_id', bookId)
         .order('created_at', { ascending: true });
       
-      if (topicsError) throw topicsError;
+      if (topicsError) {
+        console.error('Error fetching book_contents:', topicsError);
+        throw topicsError;
+      }
       setAvailableTopics(topics || []);
+
+      // Fetch reader contents
+      const { data: readerContents, error: readerError } = await supabase
+        .from('book_reader_contents')
+        .select('*')
+        .eq('book_id', bookId)
+        .order('created_at', { ascending: true });
+      
+      if (readerError) {
+        console.warn('Error fetching book_reader_contents (Table might not exist yet):', readerError);
+        setAvailableReaderContents([]);
+      } else {
+        console.log(`Fetched ${readerContents?.length || 0} reader sections for book ${bookId}`);
+        setAvailableReaderContents(readerContents || []);
+      }
 
       if (topics && topics.length > 0) {
         const topicIds = topics.map(t => t.id);
@@ -217,6 +250,24 @@ export default function App() {
     }
   };
 
+  // Automatically set title from URL if no file is selected
+  useEffect(() => {
+    if (bookUrl && !file && !overwriteMode) {
+      const fileName = bookUrl.split('/').pop() || '';
+      if (fileName && fileName.toLowerCase().includes('.pdf')) {
+        const title = decodeURIComponent(fileName)
+          .split('?')[0] // Remove query params
+          .replace('.pdf', '')
+          .replace(/_/g, ' ')
+          .replace(/-/g, ' ')
+          .trim();
+        if (title) {
+          setBookMetadata(prev => ({ ...prev, title }));
+        }
+      }
+    }
+  }, [bookUrl, file, overwriteMode]);
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const selectedFile = e.target.files[0];
@@ -225,13 +276,14 @@ export default function App() {
         return;
       }
       setFile(selectedFile);
+      setBookUrl(''); // Clear URL if file is selected
       setBookMetadata({ ...bookMetadata, title: selectedFile.name.replace('.pdf', '') });
       setError(null);
     }
   };
 
   const uploadBookOnly = async () => {
-    if (!file) return;
+    if (!file && !bookUrl) return;
     setIsProcessing(true);
     setError(null);
     setSuccess(null);
@@ -239,14 +291,44 @@ export default function App() {
     try {
       const supabase = getSupabase();
       
+      let finalFile: File | Blob;
+      let finalFileName: string;
+
+      if (file) {
+        finalFile = file;
+        finalFileName = file.name;
+      } else {
+        // Handle URL download
+        try {
+          let response;
+          try {
+            response = await fetch(bookUrl);
+          } catch (e) {
+            // Fallback to CORS proxy if direct fetch fails (likely CORS issue)
+            response = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(bookUrl)}`);
+          }
+
+          if (!response.ok) throw new Error('Failed to fetch file from URL. Ensure the URL is public and allows CORS.');
+          const blob = await response.blob();
+          if (blob.type !== 'application/pdf' && !bookUrl.toLowerCase().endsWith('.pdf')) {
+             throw new Error('The URL does not point to a PDF file.');
+          }
+          finalFile = blob;
+          finalFileName = bookUrl.split('/').pop() || 'downloaded_book.pdf';
+          if (!finalFileName.endsWith('.pdf')) finalFileName += '.pdf';
+        } catch (err) {
+          throw new Error(err instanceof Error ? err.message : 'Failed to download book from URL.');
+        }
+      }
+
       // 1. Upload to Storage
-      const fileExt = file.name.split('.').pop();
+      const fileExt = 'pdf';
       const fileName = `${Math.random()}.${fileExt}`;
       const filePath = `${bookMetadata.class}/${fileName}`;
 
       const { error: uploadError } = await supabase.storage
         .from('books')
-        .upload(filePath, file);
+        .upload(filePath, finalFile);
 
       if (uploadError) throw uploadError;
 
@@ -254,6 +336,8 @@ export default function App() {
       let bookId: string;
       let isOverwrite = false;
       let oldFilePath: string | null = null;
+
+      const bookTitle = bookMetadata.title || finalFileName.replace('.pdf', '');
 
       if (overwriteMode && selectedBookToOverwrite) {
         bookId = selectedBookToOverwrite;
@@ -264,7 +348,7 @@ export default function App() {
         const { data: existingBook } = await supabase
           .from('books')
           .select('id, file_path')
-          .eq('title', bookMetadata.title)
+          .eq('title', bookTitle)
           .eq('subject', bookMetadata.subject)
           .eq('class', bookMetadata.class)
           .maybeSingle();
@@ -276,7 +360,7 @@ export default function App() {
         } else {
           const { data: newBook, error: bookError } = await supabase
             .from('books')
-            .insert([{ ...bookMetadata, file_path: filePath }])
+            .insert([{ ...bookMetadata, title: bookTitle, file_path: filePath }])
             .select()
             .single();
 
@@ -318,6 +402,7 @@ export default function App() {
 
       setSuccess(isOverwrite ? 'Book file updated and old contents cleared!' : 'Book uploaded to library!');
       setFile(null);
+      setBookUrl('');
       setOverwriteMode(false);
       setSelectedBookToOverwrite('');
       fetchGrades();
@@ -338,6 +423,7 @@ export default function App() {
     setIsProcessing(true);
     setError(null);
     setParsedContents([]);
+    setParsedReaderContents([]);
 
     try {
       const supabase = getSupabase();
@@ -355,10 +441,17 @@ export default function App() {
       reader.onload = async () => {
         try {
           const base64 = (reader.result as string).split(',')[1];
-          const contents = await parseBookPDF(base64);
+          
+          // Run both extractions in parallel
+          const [contents, readerContents] = await Promise.all([
+            parseBookPDF(base64),
+            extractFullBookReaderContent(base64)
+          ]);
+
           setParsedContents(contents);
+          setParsedReaderContents(readerContents);
           setIsProcessing(false);
-          setSuccess(`Successfully extracted ${contents.length} topics from "${book.title}"!`);
+          setSuccess(`Successfully extracted ${contents.length} topics and ${readerContents.length} reader sections from "${book.title}"!`);
         } catch (err) {
           console.error(err);
           setError('An error occurred while analyzing the book.');
@@ -396,15 +489,16 @@ export default function App() {
       }
 
       // 3. Delete existing contents for this book
-      const { error: deleteError } = await supabase
-        .from('book_contents')
-        .delete()
-        .eq('book_id', bookId);
+      await supabase.from('book_contents').delete().eq('book_id', bookId);
+      await supabase.from('book_reader_contents').delete().eq('book_id', bookId);
       
-      if (deleteError) throw deleteError;
-
       // 4. Save new contents
       const contentsToSave = parsedContents.map(c => ({
+        ...c,
+        book_id: bookId
+      }));
+
+      const readerContentsToSave = parsedReaderContents.map(c => ({
         ...c,
         book_id: bookId
       }));
@@ -412,8 +506,14 @@ export default function App() {
       const { error: contentsError } = await supabase.from('book_contents').insert(contentsToSave);
       if (contentsError) throw contentsError;
 
-      setSuccess(`Successfully saved ${parsedContents.length} topics to "${bookToAnalyze.title}"!`);
+      if (readerContentsToSave.length > 0) {
+        const { error: readerError } = await supabase.from('book_reader_contents').insert(readerContentsToSave);
+        if (readerError) throw readerError;
+      }
+
+      setSuccess(`Successfully saved ${parsedContents.length} topics and ${parsedReaderContents.length} reader sections to "${bookToAnalyze.title}"!`);
       setParsedContents([]);
+      setParsedReaderContents([]);
       setBookToAnalyze(null);
       navigate('/books');
     } catch (err) {
@@ -724,6 +824,50 @@ export default function App() {
     }
   };
 
+  const handleAskQuestion = async () => {
+    if (!selectedBook || !qaQuestion.trim()) return;
+    
+    setIsAnswering(true);
+    setError(null);
+    setQaAnswer('');
+    
+    try {
+      const supabase = getSupabase();
+      
+      // 1. Search for relevant context first
+      setIsSearching(true);
+      const relevantContents = await searchBookContents(qaQuestion, selectedBook.id!, supabase);
+      setQaSearchResults(relevantContents);
+      setIsSearching(false);
+      
+      if (relevantContents.length === 0 && availableTopics.length === 0) {
+        throw new Error("This book has no analyzed content. Please analyze it first in the Books tab.");
+      }
+      
+      // If search found nothing, fallback to first few topics
+      const contextToUse = relevantContents.length > 0 
+        ? relevantContents 
+        : availableTopics.slice(0, 5);
+      
+      const answer = await answerQuestionFromBook(
+        qaQuestion,
+        selectedBook.title,
+        contextToUse,
+        selectedSubject,
+        selectedGrade,
+        targetLanguage
+      );
+      
+      setQaAnswer(answer);
+    } catch (err) {
+      console.error('Q&A error:', err);
+      setError(err instanceof Error ? err.message : 'Failed to get an answer.');
+    } finally {
+      setIsAnswering(false);
+      setIsSearching(false);
+    }
+  };
+
   const savePlan = async () => {
     // This is now handled automatically by handleAutoGenerate, 
     // but we can keep it for manual updates if needed or just remove it.
@@ -856,6 +1000,8 @@ export default function App() {
             <NavLink to="/" className={({isActive}) => cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", isActive ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Upload</NavLink>
             <NavLink to="/books" className={({isActive}) => cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", isActive ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Books</NavLink>
             <NavLink to="/generator" className={({isActive}) => cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", isActive ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Generator</NavLink>
+            <NavLink to="/reader" className={({isActive}) => cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", isActive ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Reader</NavLink>
+            <NavLink to="/qa" className={({isActive}) => cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", isActive ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Q&A</NavLink>
             <NavLink to="/lesson-plans" className={({isActive}) => cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", isActive ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Lesson Plans</NavLink>
           </nav>
 
@@ -898,6 +1044,20 @@ export default function App() {
                   className={({isActive}) => cn("px-4 py-3 rounded-xl text-sm font-bold transition-all flex items-center gap-3", isActive ? "bg-indigo-50 text-indigo-600" : "text-slate-500 hover:bg-slate-50")}
                 >
                   <Sparkles className="w-5 h-5" /> Generator
+                </NavLink>
+                <NavLink 
+                  to="/reader" 
+                  onClick={() => setIsMenuOpen(false)}
+                  className={({isActive}) => cn("px-4 py-3 rounded-xl text-sm font-bold transition-all flex items-center gap-3", isActive ? "bg-indigo-50 text-indigo-600" : "text-slate-500 hover:bg-slate-50")}
+                >
+                  <BookOpen className="w-5 h-5" /> Reader
+                </NavLink>
+                <NavLink 
+                  to="/qa" 
+                  onClick={() => setIsMenuOpen(false)}
+                  className={({isActive}) => cn("px-4 py-3 rounded-xl text-sm font-bold transition-all flex items-center gap-3", isActive ? "bg-indigo-50 text-indigo-600" : "text-slate-500 hover:bg-slate-50")}
+                >
+                  <Search className="w-5 h-5" /> Q&A
                 </NavLink>
                 <NavLink 
                   to="/lesson-plans" 
@@ -951,6 +1111,32 @@ export default function App() {
                       <p className="font-bold text-slate-700 text-center">{file ? file.name : "Click or drag PDF here"}</p>
                       <p className="text-xs text-slate-400 tracking-wide uppercase font-bold">PDF Format Only</p>
                     </div>
+                  </div>
+
+                  <div className="relative">
+                    <div className="absolute inset-0 flex items-center" aria-hidden="true">
+                      <div className="w-full border-t border-slate-200"></div>
+                    </div>
+                    <div className="relative flex justify-center text-xs uppercase">
+                      <span className="bg-white px-2 text-slate-400 font-bold tracking-widest">OR PASTE URL</span>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="relative">
+                      <LinkIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                      <input 
+                        type="url" 
+                        placeholder="https://example.com/book.pdf" 
+                        value={bookUrl}
+                        onChange={e => {
+                          setBookUrl(e.target.value);
+                          if (e.target.value) setFile(null); // Clear file if URL is pasted
+                        }}
+                        className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                      />
+                    </div>
+                    <p className="text-[10px] text-slate-400 italic ml-1">Note: URL must be direct link to a public PDF file.</p>
                   </div>
 
                   {overwriteMode ? (
@@ -1017,7 +1203,7 @@ export default function App() {
                     </div>
                     <button 
                       onClick={uploadBookOnly} 
-                      disabled={!file || isProcessing || (overwriteMode && !selectedBookToOverwrite) || (!overwriteMode && (!bookMetadata.title || !bookMetadata.subject || !bookMetadata.class))}
+                      disabled={(!file && !bookUrl) || isProcessing || (overwriteMode && !selectedBookToOverwrite) || (!overwriteMode && (!bookMetadata.title || !bookMetadata.subject || !bookMetadata.class))}
                       className="w-full py-4 rounded-2xl font-bold text-lg bg-indigo-600 text-white hover:bg-indigo-700 shadow-lg shadow-indigo-100 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       {isProcessing ? <Loader2 className="w-6 h-6 animate-spin" /> : <><Save className="w-6 h-6" /> Upload to Library</>}
@@ -1488,6 +1674,432 @@ export default function App() {
                     <Sparkles className="w-12 h-12 text-slate-200 mx-auto mb-4" />
                     <p className="text-slate-400">Select a Grade, Subject, and Topic to auto-generate a lesson plan.</p>
                   </div>
+                )}
+              </AnimatePresence>
+            </section>
+          } />
+
+          <Route path="/reader" element={
+            <section className="space-y-8">
+              <div className="bg-white rounded-2xl border border-slate-200 p-8 shadow-sm">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+                  <h2 className="text-2xl font-bold flex items-center gap-2"><BookOpen className="text-indigo-600 w-6 h-6" /> Book Reader</h2>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {/* Grade Selector */}
+                  <div className="space-y-2">
+                    <label className="text-sm font-bold text-slate-500 uppercase flex items-center gap-2"><GraduationCap className="w-4 h-4" /> Grade</label>
+                    <select 
+                      value={selectedGrade} 
+                      onChange={e => setSelectedGrade(e.target.value)}
+                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                    >
+                      <option value="">-- Grade --</option>
+                      {availableGrades.map((g, i) => <option key={`reader-g-${g}-${i}`} value={g}>{g}</option>)}
+                    </select>
+                  </div>
+
+                  {/* Subject Selector */}
+                  <div className="space-y-2">
+                    <label className="text-sm font-bold text-slate-500 uppercase flex items-center gap-2"><BookIcon className="w-4 h-4" /> Subject</label>
+                    <select 
+                      value={selectedSubject} 
+                      onChange={e => setSelectedSubject(e.target.value)}
+                      disabled={!selectedGrade}
+                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:opacity-50"
+                    >
+                      <option value="">-- Subject --</option>
+                      {availableSubjects.map((s, i) => <option key={`reader-s-${s}-${i}`} value={s}>{s}</option>)}
+                    </select>
+                  </div>
+
+                  {/* Book Selector */}
+                  <div className="space-y-2">
+                    <label className="text-sm font-bold text-slate-500 uppercase flex items-center gap-2"><BookOpen className="w-4 h-4" /> Book</label>
+                    <select 
+                      value={selectedBook?.id || ''} 
+                      onChange={e => setSelectedBook(availableBooks.find(b => b.id === e.target.value) || null)}
+                      disabled={!selectedSubject}
+                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:opacity-50"
+                    >
+                      <option value="">-- Book --</option>
+                      {availableBooks.map((b, i) => <option key={`reader-b-${b.id}-${i}`} value={b.id}>{b.title}</option>)}
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              {selectedBook && (availableReaderContents.length > 0 || availableTopics.length > 0) ? (
+                <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
+                  {/* Chapter Navigation Sidebar */}
+                  <div className="lg:col-span-1 space-y-4">
+                    <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm sticky top-24">
+                      <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2"><List className="w-4 h-4 text-indigo-600" /> Chapters</h3>
+                      <div className="space-y-1 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
+                        {(availableReaderContents.length > 0 ? availableReaderContents : availableTopics).map((topic, idx) => (
+                          <button
+                            key={`topic-nav-${idx}`}
+                            onClick={() => {
+                              setCurrentReaderPageIndex(idx);
+                              window.scrollTo({ top: 0, behavior: 'smooth' });
+                            }}
+                            className={cn(
+                              "w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-all line-clamp-1",
+                              currentReaderPageIndex === idx 
+                                ? "bg-indigo-600 text-white shadow-md shadow-indigo-100" 
+                                : "text-slate-600 hover:bg-indigo-50 hover:text-indigo-600"
+                            )}
+                          >
+                            <span className="opacity-50 mr-2">{idx + 1}.</span> {topic.topic}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Content Display */}
+                  <div className="lg:col-span-3 space-y-8">
+                    {availableReaderContents.length === 0 && availableTopics.length > 0 && (
+                      <div className="bg-amber-50 border border-amber-200 p-4 rounded-xl flex items-center gap-3 text-amber-800 text-sm">
+                        <AlertCircle className="w-5 h-5 shrink-0" />
+                        <p>Showing basic content. For the full academic reader experience (key points, examples, formulas), please re-analyze this book in the Library.</p>
+                      </div>
+                    )}
+
+                    {/* Pagination Controls Top */}
+                    <div className="flex items-center justify-between bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                      <button 
+                        onClick={() => setCurrentReaderPageIndex(prev => Math.max(0, prev - 1))}
+                        disabled={currentReaderPageIndex === 0}
+                        className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-30 transition-all"
+                      >
+                        <ChevronLeft className="w-4 h-4" /> Previous
+                      </button>
+                      <div className="text-sm font-bold text-slate-500">
+                        Page <span className="text-indigo-600">{currentReaderPageIndex + 1}</span> of {availableReaderContents.length > 0 ? availableReaderContents.length : availableTopics.length}
+                      </div>
+                      <button 
+                        onClick={() => setCurrentReaderPageIndex(prev => Math.min((availableReaderContents.length > 0 ? availableReaderContents.length : availableTopics.length) - 1, prev + 1))}
+                        disabled={currentReaderPageIndex === (availableReaderContents.length > 0 ? availableReaderContents.length : availableTopics.length) - 1}
+                        className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold text-indigo-600 hover:bg-indigo-50 disabled:opacity-30 transition-all"
+                      >
+                        Next <ChevronRight className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    {/* Single Page Content */}
+                    {(() => {
+                      const contentList = availableReaderContents.length > 0 ? availableReaderContents : availableTopics;
+                      const topic = contentList[currentReaderPageIndex];
+                      if (!topic) return null;
+
+                      return (
+                        <motion.div 
+                          key={`page-${currentReaderPageIndex}`}
+                          initial={{ opacity: 0, x: 20 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm"
+                        >
+                          <div className="bg-slate-50 px-8 py-4 border-b border-slate-200 flex items-center justify-between">
+                            <div>
+                              <p className="text-[10px] font-bold text-indigo-500 uppercase tracking-widest mb-1">{topic.unit} {topic.chapter ? `• ${topic.chapter}` : ''}</p>
+                              <h3 className="text-xl font-bold text-slate-800">{topic.topic}</h3>
+                            </div>
+                            <div className="bg-indigo-600 text-white w-10 h-10 rounded-xl flex items-center justify-center font-bold shadow-lg shadow-indigo-100">
+                              {currentReaderPageIndex + 1}
+                            </div>
+                          </div>
+                          
+                          <div className="p-8 space-y-8">
+                            {topic.sub_topic && (
+                              <div className="text-sm font-bold text-indigo-500 uppercase tracking-wider">
+                                Sub-topic: {topic.sub_topic}
+                              </div>
+                            )}
+
+                            <div className="prose prose-slate max-w-none">
+                              <p className="text-slate-700 leading-relaxed whitespace-pre-wrap text-lg">
+                                {availableReaderContents.length > 0 ? (topic as any).full_content : (topic as any).content}
+                              </p>
+                            </div>
+                            
+                            {availableReaderContents.length > 0 && (
+                              <>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                  {(topic as any).key_points && (topic as any).key_points.length > 0 && (
+                                    <div className="bg-indigo-50 border border-indigo-100 p-6 rounded-2xl">
+                                      <h5 className="text-xs font-bold text-indigo-700 uppercase tracking-widest mb-4 flex items-center gap-2">
+                                        <Sparkles className="w-3 h-3" /> Key Takeaways
+                                      </h5>
+                                      <ul className="space-y-3">
+                                        {(topic as any).key_points.map((pt: string, i: number) => (
+                                          <li key={`pt-${i}`} className="text-sm text-slate-700 flex gap-3">
+                                            <span className="text-indigo-400 font-bold shrink-0">•</span> {pt}
+                                          </li>
+                                        ))}
+                                      </ul>
+                                    </div>
+                                  )}
+
+                                  {(topic as any).examples && (topic as any).examples.length > 0 && (
+                                    <div className="bg-amber-50 border border-amber-100 p-6 rounded-2xl">
+                                      <h5 className="text-xs font-bold text-amber-700 uppercase tracking-widest mb-4 flex items-center gap-2">
+                                        <BookOpen className="w-3 h-3" /> Examples
+                                      </h5>
+                                      <ul className="space-y-3">
+                                        {(topic as any).examples.map((ex: string, i: number) => (
+                                          <li key={`ex-${i}`} className="text-sm text-slate-700 flex gap-3">
+                                            <span className="text-amber-400 font-bold shrink-0">→</span> {ex}
+                                          </li>
+                                        ))}
+                                      </ul>
+                                    </div>
+                                  )}
+                                </div>
+
+                                {(topic as any).formulas && (topic as any).formulas.length > 0 && (
+                                  <div className="bg-slate-900 p-8 rounded-2xl">
+                                    <h5 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-6 flex items-center gap-2">
+                                      <RefreshCw className="w-3 h-3" /> Formulas & Concepts
+                                    </h5>
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                      {(topic as any).formulas.map((f: string, i: number) => (
+                                        <div key={`f-${i}`} className="bg-white/5 border border-white/10 p-4 rounded-xl text-white font-mono text-sm flex items-center justify-center text-center">
+                                          {f}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                              </>
+                            )}
+
+                            {availableReaderContents.length === 0 && (topic as any).goals && (
+                              <div className="bg-emerald-50 border border-emerald-100 p-6 rounded-2xl">
+                                <h5 className="text-xs font-bold text-emerald-700 uppercase tracking-widest mb-3 flex items-center gap-2">
+                                  <CheckCircle2 className="w-3 h-3" /> Learning Objectives
+                                </h5>
+                                <p className="text-emerald-800 text-sm italic">{(topic as any).goals}</p>
+                              </div>
+                            )}
+                          </div>
+                        </motion.div>
+                      );
+                    })()}
+
+                    {/* Pagination Controls Bottom */}
+                    <div className="flex items-center justify-between bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                      <button 
+                        onClick={() => {
+                          setCurrentReaderPageIndex(prev => Math.max(0, prev - 1));
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }}
+                        disabled={currentReaderPageIndex === 0}
+                        className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-30 transition-all"
+                      >
+                        <ChevronLeft className="w-4 h-4" /> Previous
+                      </button>
+                      <button 
+                        onClick={() => {
+                          setCurrentReaderPageIndex(prev => Math.min((availableReaderContents.length > 0 ? availableReaderContents.length : availableTopics.length) - 1, prev + 1));
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }}
+                        disabled={currentReaderPageIndex === (availableReaderContents.length > 0 ? availableReaderContents.length : availableTopics.length) - 1}
+                        className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold text-indigo-600 hover:bg-indigo-50 disabled:opacity-30 transition-all"
+                      >
+                        Next <ChevronRight className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+
+                </div>
+              ) : selectedBook ? (
+                <div className="text-center py-20 bg-white rounded-2xl border border-slate-200 border-dashed">
+                  <AlertCircle className="w-12 h-12 text-amber-400 mx-auto mb-4" />
+                  <p className="text-slate-500 font-medium">This book hasn't been analyzed yet.</p>
+                  <button 
+                    onClick={() => navigate('/books')}
+                    className="mt-4 text-indigo-600 font-bold hover:underline"
+                  >
+                    Go to Library to Analyze
+                  </button>
+                </div>
+              ) : (
+                <div className="text-center py-20 bg-white rounded-2xl border border-slate-200 border-dashed">
+                  <BookOpen className="w-12 h-12 text-slate-200 mx-auto mb-4" />
+                  <p className="text-slate-400">Select a Grade, Subject, and Book to view its content.</p>
+                </div>
+              )}
+            </section>
+          } />
+
+          <Route path="/qa" element={
+            <section className="space-y-8">
+              <div className="bg-white rounded-2xl border border-slate-200 p-8 shadow-sm">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+                  <h2 className="text-2xl font-bold flex items-center gap-2"><Search className="text-indigo-600 w-6 h-6" /> Book Q&A</h2>
+                  <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-xl w-fit">
+                    <button 
+                      onClick={() => setTargetLanguage('English')} 
+                      className={cn("px-4 py-1.5 rounded-lg text-sm font-bold transition-all", targetLanguage === 'English' ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500")}
+                    >
+                      English
+                    </button>
+                    <button 
+                      onClick={() => setTargetLanguage('Nepali')} 
+                      className={cn("px-4 py-1.5 rounded-lg text-sm font-bold transition-all", targetLanguage === 'Nepali' ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500")}
+                    >
+                      Nepali
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
+                  {/* Grade Selector */}
+                  <div className="space-y-2">
+                    <label className="text-sm font-bold text-slate-500 uppercase flex items-center gap-2"><GraduationCap className="w-4 h-4" /> Grade</label>
+                    <select 
+                      value={selectedGrade} 
+                      onChange={e => setSelectedGrade(e.target.value)}
+                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                    >
+                      <option value="">-- Grade --</option>
+                      {availableGrades.map((g, i) => <option key={`qa-g-${g}-${i}`} value={g}>{g}</option>)}
+                    </select>
+                  </div>
+
+                  {/* Subject Selector */}
+                  <div className="space-y-2">
+                    <label className="text-sm font-bold text-slate-500 uppercase flex items-center gap-2"><BookIcon className="w-4 h-4" /> Subject</label>
+                    <select 
+                      value={selectedSubject} 
+                      onChange={e => setSelectedSubject(e.target.value)}
+                      disabled={!selectedGrade}
+                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:opacity-50"
+                    >
+                      <option value="">-- Subject --</option>
+                      {availableSubjects.map((s, i) => <option key={`qa-s-${s}-${i}`} value={s}>{s}</option>)}
+                    </select>
+                  </div>
+
+                  {/* Book Selector */}
+                  <div className="space-y-2">
+                    <label className="text-sm font-bold text-slate-500 uppercase flex items-center gap-2"><BookOpen className="w-4 h-4" /> Book</label>
+                    <select 
+                      value={selectedBook?.id || ''} 
+                      onChange={e => setSelectedBook(availableBooks.find(b => b.id === e.target.value) || null)}
+                      disabled={!selectedSubject}
+                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:opacity-50"
+                    >
+                      <option value="">-- Book --</option>
+                      {availableBooks.map((b, i) => <option key={`qa-b-${b.id}-${i}`} value={b.id}>{b.title}</option>)}
+                    </select>
+                  </div>
+                </div>
+
+                {selectedBook && (
+                  <div className="space-y-6 pt-6 border-t border-slate-100">
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-sm font-bold text-slate-500 uppercase">Ask a question about this book</label>
+                        <span className="text-[10px] text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">Search-enabled</span>
+                      </div>
+                      <div className="relative">
+                        <textarea 
+                          value={qaQuestion}
+                          onChange={e => setQaQuestion(e.target.value)}
+                          placeholder="e.g., What are the main causes of air pollution mentioned in this book?"
+                          className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all min-h-[100px]"
+                        />
+                      </div>
+                    </div>
+                    <div className="flex flex-col sm:flex-row gap-4">
+                      <button 
+                        onClick={handleAskQuestion}
+                        disabled={isAnswering || !qaQuestion.trim()}
+                        className="flex-1 px-8 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 disabled:opacity-50 flex items-center justify-center gap-2"
+                      >
+                        {isAnswering ? <Loader2 className="w-5 h-5 animate-spin" /> : <Sparkles className="w-5 h-5" />}
+                        {isAnswering ? 'Finding Answer...' : 'Ask Question'}
+                      </button>
+                      
+                      <button 
+                        onClick={async () => {
+                          if (!selectedBook || !qaQuestion.trim()) return;
+                          setIsSearching(true);
+                          const results = await searchBookContents(qaQuestion, selectedBook.id!, getSupabase());
+                          setQaSearchResults(results);
+                          setIsSearching(false);
+                        }}
+                        disabled={isSearching || !qaQuestion.trim()}
+                        className="px-6 py-3 bg-slate-100 text-slate-700 rounded-xl font-bold hover:bg-slate-200 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                      >
+                        {isSearching ? <Loader2 className="w-5 h-5 animate-spin" /> : <Search className="w-5 h-5" />}
+                        Search Book
+                      </button>
+                    </div>
+
+                    {qaSearchResults.length > 0 && (
+                      <div className="mt-4 space-y-2">
+                        <p className="text-xs font-bold text-slate-400 uppercase">Related Sections Found:</p>
+                        <div className="flex flex-wrap gap-2">
+                          {qaSearchResults.map((res, i) => (
+                            <div key={`res-${i}`} className="text-[10px] bg-indigo-50 text-indigo-600 px-2 py-1 rounded-lg border border-indigo-100">
+                              {res.topic}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {!selectedBook && (
+                  <div className="text-center py-12 bg-slate-50 rounded-2xl border border-slate-100 border-dashed">
+                    <BookOpen className="w-12 h-12 text-slate-200 mx-auto mb-4" />
+                    <p className="text-slate-400">Select a Grade, Subject, and Book to start asking questions.</p>
+                  </div>
+                )}
+              </div>
+
+              {/* Answer Display */}
+              <AnimatePresence mode="wait">
+                {(isAnswering || qaAnswer) && (
+                  <motion.div 
+                    initial={{ opacity: 0, y: 20 }} 
+                    animate={{ opacity: 1, y: 0 }} 
+                    exit={{ opacity: 0, y: -20 }}
+                    className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-lg"
+                  >
+                    <div className="bg-indigo-600 px-8 py-4 text-white flex items-center justify-between">
+                      <h3 className="font-bold flex items-center gap-2"><Sparkles className="w-5 h-5" /> Answer</h3>
+                      {qaAnswer && (
+                        <button 
+                          onClick={() => {
+                            navigator.clipboard.writeText(qaAnswer);
+                            setSuccess('Answer copied to clipboard!');
+                          }}
+                          className="p-2 hover:bg-white/10 rounded-lg transition-all"
+                          title="Copy Answer"
+                        >
+                          <Copy className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                    <div className="p-8">
+                      {isAnswering ? (
+                        <div className="flex flex-col items-center justify-center py-10">
+                          <Loader2 className="w-10 h-10 text-indigo-600 animate-spin mb-4" />
+                          <p className="text-slate-500 animate-pulse">Consulting the textbook...</p>
+                        </div>
+                      ) : (
+                        <div className="prose prose-slate max-w-none">
+                          <p className="text-slate-700 leading-relaxed whitespace-pre-wrap">{qaAnswer}</p>
+                        </div>
+                      )}
+                    </div>
+                  </motion.div>
                 )}
               </AnimatePresence>
             </section>

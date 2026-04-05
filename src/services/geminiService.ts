@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import { LessonPlan, BookContent } from "../types";
+import { LessonPlan, BookContent, BookReaderContent } from "../types";
 
 // Use import.meta.env for Vite/Vercel deployments, fallback to process.env for AI Studio environment
 const apiKey = import.meta.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || "";
@@ -38,6 +38,10 @@ async function callGeminiWithRetry(params: any, maxRetries = 3): Promise<any> {
   throw lastError;
 }
 
+/**
+ * Enhanced extraction for Lesson Plan Generator
+ * Focuses on pedagogical structure and core concepts
+ */
 export async function parseBookPDF(pdfBase64: string): Promise<Partial<BookContent>[]> {
   const response = await callGeminiWithRetry({
     model: "gemini-3-flash-preview",
@@ -51,27 +55,19 @@ export async function parseBookPDF(pdfBase64: string): Promise<Partial<BookConte
             },
           },
           {
-            text: `Analyze this textbook PDF. 
+            text: `Analyze this textbook PDF for academic-grade lesson planning. 
             
-            1. Detect the primary language of the text. 
-            2. If the text is in English, perform all extractions in English. 
-            3. If the text is in Nepali but uses legacy font encodings (like Preeti, where "PsfO" = "इकाई"), decode it to proper UNICODE NEPALI.
-            4. If the text is in standard Unicode Nepali, keep it in Unicode Nepali.
+            1. Detect the primary language. 
+            2. Decode legacy Nepali fonts (like Preeti) to UNICODE if necessary.
             
             Strictly extract the hierarchy: Unit -> Chapter -> Lesson -> Topic -> Sub-topic.
-            Ensure you capture every level available in the book.
             
-            For each specific topic/sub-topic, provide a summary of the content and the primary goal/objective.
-            If this is a Mathematics book, ensure the content summary includes key formulas or concepts covered.
+            For each topic/sub-topic, provide a HIGH-QUALITY, ACADEMIC-LEVEL extraction:
+            - content: A detailed, pedagogical summary of the content. Include core theories, key definitions, and critical explanations. This must be thorough enough for a university-level instructor to build a lesson.
+            - goals: Specific, measurable learning outcomes (Bloom's Taxonomy style).
             
             Return a JSON array of objects with these keys:
-            - unit: The unit name/number
-            - chapter: The chapter name/number (if applicable)
-            - lesson: The lesson name/number
-            - topic: The specific topic name
-            - sub_topic: The sub-topic name (if applicable)
-            - content: A detailed summary of the content for this topic (in the detected language)
-            - goals: The learning objectives for this topic (in the detected language)`,
+            - unit, chapter, lesson, topic, sub_topic, content, goals`,
           },
         ],
       },
@@ -103,6 +99,130 @@ export async function parseBookPDF(pdfBase64: string): Promise<Partial<BookConte
     console.error("Failed to parse Gemini response", e);
     return [];
   }
+}
+
+/**
+ * High-fidelity extraction for the Book Reader
+ * Focuses on capturing the full academic value of the text
+ */
+export async function extractFullBookReaderContent(pdfBase64: string): Promise<Partial<BookReaderContent>[]> {
+  const response = await callGeminiWithRetry({
+    model: "gemini-3-flash-preview",
+    contents: [
+      {
+        parts: [
+          {
+            inlineData: {
+              mimeType: "application/pdf",
+              data: pdfBase64,
+            },
+          },
+          {
+            text: `Perform a high-fidelity academic extraction of this entire textbook PDF for a digital reader.
+            
+            1. Detect language and ensure proper Unicode encoding.
+            2. Extract every Unit, Chapter, Lesson, and Topic.
+            
+            For each section, extract:
+            - full_content: The most detailed version of the text possible, capturing all nuances, detailed explanations, and high-level academic concepts. 
+            - key_points: A list of the most important takeaways.
+            - examples: Any illustrative examples or case studies provided in the text.
+            - formulas: Any mathematical or scientific formulas mentioned.
+            
+            Return a JSON array of objects with these keys:
+            - unit, chapter, lesson, topic, sub_topic, full_content, key_points, examples, formulas`,
+          },
+        ],
+      },
+    ],
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            unit: { type: Type.STRING },
+            chapter: { type: Type.STRING },
+            lesson: { type: Type.STRING },
+            topic: { type: Type.STRING },
+            sub_topic: { type: Type.STRING },
+            full_content: { type: Type.STRING },
+            key_points: { type: Type.ARRAY, items: { type: Type.STRING } },
+            examples: { type: Type.ARRAY, items: { type: Type.STRING } },
+            formulas: { type: Type.ARRAY, items: { type: Type.STRING } }
+          },
+          required: ["unit", "topic", "full_content", "key_points", "examples"]
+        }
+      }
+    },
+  });
+
+  try {
+    console.log('Gemini Reader Extraction Response:', response.text);
+    return JSON.parse(response.text || "[]");
+  } catch (e) {
+    console.error("Failed to parse Gemini response", e);
+    return [];
+  }
+}
+
+export async function searchBookContents(
+  query: string,
+  bookId: string,
+  supabase: any
+): Promise<BookContent[]> {
+  // Simple text search using ilike on topic and content
+  const { data, error } = await supabase
+    .from('book_contents')
+    .select('*')
+    .eq('book_id', bookId)
+    .or(`topic.ilike.%${query}%,content.ilike.%${query}%,unit.ilike.%${query}%`)
+    .limit(10);
+
+  if (error) {
+    console.error('Search error:', error);
+    return [];
+  }
+
+  return data || [];
+}
+
+export async function answerQuestionFromBook(
+  question: string,
+  bookTitle: string,
+  bookContents: BookContent[],
+  subject: string,
+  className: string,
+  targetLanguage: string = 'English'
+): Promise<string> {
+  const context = bookContents.map(c => `Unit: ${c.unit}, Topic: ${c.topic}, Content: ${c.content}`).join('\n\n');
+  
+  const response = await callGeminiWithRetry({
+    model: "gemini-3-flash-preview",
+    contents: [
+      {
+        text: `You are an expert educational assistant. Answer the following question based on the provided textbook content.
+        
+        BOOK: ${bookTitle}
+        SUBJECT: ${subject}
+        CLASS: ${className}
+        
+        TEXTBOOK CONTENT SUMMARIES:
+        ${context}
+        
+        QUESTION: ${question}
+        
+        INSTRUCTIONS:
+        1. Answer the question accurately based ONLY on the provided content summaries.
+        2. If the answer is not in the provided content, say "I'm sorry, but I couldn't find information about that in this specific book."
+        3. Provide the answer in ${targetLanguage}.
+        4. Keep the answer clear, concise, and educational.`,
+      },
+    ],
+  });
+
+  return response.text || "I'm sorry, I couldn't generate an answer.";
 }
 
 export async function generatePlanFromContent(content: BookContent, subject: string, className: string, targetLanguage: string = 'English'): Promise<LessonPlan> {
