@@ -5,9 +5,9 @@
 
 import React, { useState, useEffect } from 'react';
 import { Routes, Route, Link, NavLink, useNavigate, useLocation, Navigate } from 'react-router-dom';
-import { Upload, FileText, Loader2, Save, CheckCircle2, AlertCircle, ChevronDown, ChevronUp, Printer, BookOpen, Sparkles, List, GraduationCap, Book as BookIcon, Folder, RefreshCw, Trash2, Eye, Copy, Search, X, Menu, Link as LinkIcon, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Upload, FileText, Loader2, Save, CheckCircle2, AlertCircle, ChevronDown, ChevronUp, Printer, BookOpen, Sparkles, List, GraduationCap, Book as BookIcon, Folder, RefreshCw, Trash2, Eye, Copy, Search, X, Menu, Link as LinkIcon, ChevronLeft, ChevronRight, Layers } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { parseBookPDF, generatePlanFromContent, generatePlanFromPDFAndTopic, answerQuestionFromBook, searchBookContents, extractFullBookReaderContent } from './services/geminiService';
+import { parseBookPDF, generatePlanFromContent, generatePlanFromPDFAndTopic, answerQuestionFromBook, searchBookContents, extractFullBookReaderContent, identifyBookMetadata } from './services/geminiService';
 import { getSupabase } from './lib/supabase';
 import { LessonPlan, Book, BookContent, BookReaderContent } from './types';
 import { cn } from './lib/utils';
@@ -33,6 +33,8 @@ export default function App() {
   const [parsedContents, setParsedContents] = useState<Partial<BookContent>[]>([]);
   const [parsedReaderContents, setParsedReaderContents] = useState<Partial<BookReaderContent>[]>([]);
   const [bookUrl, setBookUrl] = useState('');
+  const [bulkUrls, setBulkUrls] = useState('');
+  const [isBulkMode, setIsBulkMode] = useState(false);
   const [currentReaderPageIndex, setCurrentReaderPageIndex] = useState(0);
   const [allBooks, setAllBooks] = useState<Book[]>([]);
   
@@ -283,6 +285,10 @@ export default function App() {
   };
 
   const uploadBookOnly = async () => {
+    if (isBulkMode) {
+      await handleBulkUpload();
+      return;
+    }
     if (!file && !bookUrl) return;
     setIsProcessing(true);
     setError(null);
@@ -321,10 +327,33 @@ export default function App() {
         }
       }
 
-      // 1. Upload to Storage
+      // 1. Identify metadata (smartly) if not fully provided
+      let finalTitle = bookMetadata.title || finalFileName.replace('.pdf', '');
+      let finalSubject = bookMetadata.subject;
+      let finalClass = bookMetadata.class;
+
+      if (!finalSubject || !finalClass) {
+        try {
+          const reader = new FileReader();
+          const firstPart = finalFile.slice(0, 1024 * 1024); // First 1MB
+          const base64 = await new Promise<string>((resolve) => {
+            reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
+            reader.readAsDataURL(firstPart);
+          });
+          
+          const identified = await identifyBookMetadata(finalFileName, base64);
+          if (!finalTitle) finalTitle = identified.title;
+          if (!finalSubject) finalSubject = identified.subject;
+          if (!finalClass) finalClass = identified.class;
+        } catch (metaErr) {
+          console.warn("Metadata identification failed", metaErr);
+        }
+      }
+
+      // 2. Upload to Storage
       const fileExt = 'pdf';
       const fileName = `${Math.random()}.${fileExt}`;
-      const filePath = `${bookMetadata.class}/${fileName}`;
+      const filePath = `${finalClass || 'General'}/${fileName}`;
 
       const { error: uploadError } = await supabase.storage
         .from('books')
@@ -332,12 +361,10 @@ export default function App() {
 
       if (uploadError) throw uploadError;
 
-      // 2. Determine book ID (New or Overwrite)
+      // 3. Determine book ID (New or Overwrite)
       let bookId: string;
       let isOverwrite = false;
       let oldFilePath: string | null = null;
-
-      const bookTitle = bookMetadata.title || finalFileName.replace('.pdf', '');
 
       if (overwriteMode && selectedBookToOverwrite) {
         bookId = selectedBookToOverwrite;
@@ -348,9 +375,9 @@ export default function App() {
         const { data: existingBook } = await supabase
           .from('books')
           .select('id, file_path')
-          .eq('title', bookTitle)
-          .eq('subject', bookMetadata.subject)
-          .eq('class', bookMetadata.class)
+          .eq('title', finalTitle)
+          .eq('subject', finalSubject || 'Unknown')
+          .eq('class', finalClass || 'General')
           .maybeSingle();
 
         if (existingBook) {
@@ -360,7 +387,12 @@ export default function App() {
         } else {
           const { data: newBook, error: bookError } = await supabase
             .from('books')
-            .insert([{ ...bookMetadata, title: bookTitle, file_path: filePath }])
+            .insert([{ 
+              title: finalTitle, 
+              subject: finalSubject || 'Unknown', 
+              class: finalClass || 'General', 
+              file_path: filePath 
+            }])
             .select()
             .single();
 
@@ -397,7 +429,12 @@ export default function App() {
           .eq('book_id', bookId);
 
         // 5. Update book metadata
-        await supabase.from('books').update({ ...bookMetadata, file_path: filePath }).eq('id', bookId);
+        await supabase.from('books').update({ 
+          title: finalTitle, 
+          subject: finalSubject || 'Unknown', 
+          class: finalClass || 'General', 
+          file_path: filePath 
+        }).eq('id', bookId);
       }
 
       setSuccess(isOverwrite ? 'Book file updated and old contents cleared!' : 'Book uploaded to library!');
@@ -414,6 +451,115 @@ export default function App() {
     } finally {
       setIsProcessing(false);
     }
+  };
+
+  const handleBulkUpload = async () => {
+    const lines = bulkUrls.split('\n').map(u => u.trim()).filter(u => u.length > 0);
+    if (lines.length === 0) return;
+
+    setIsProcessing(true);
+    setBulkTotal(lines.length);
+    setBulkProgress(0);
+    setError(null);
+    setSuccess(null);
+
+    let successCount = 0;
+    let failCount = 0;
+
+    const supabase = getSupabase();
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      // Support format: URL | Grade | Subject | Title
+      const parts = line.split('|').map(p => p.trim());
+      const url = parts[0];
+      const customGrade = parts[1];
+      const customSubject = parts[2];
+      const customTitle = parts[3];
+
+      try {
+        setBulkProgress(i + 1);
+        
+        // Extract title from URL as fallback
+        const fileName = url.split('/').pop() || '';
+        const fallbackTitle = decodeURIComponent(fileName)
+          .split('?')[0]
+          .replace('.pdf', '')
+          .replace(/_/g, ' ')
+          .replace(/-/g, ' ')
+          .trim() || `Book ${i + 1}`;
+
+        // Download
+        let response;
+        try {
+          response = await fetch(url);
+        } catch (e) {
+          response = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`);
+        }
+
+        if (!response.ok) throw new Error('Fetch failed');
+        const blob = await response.blob();
+        
+        // Identify metadata (smartly)
+        let metadata = { 
+          title: customTitle || fallbackTitle, 
+          subject: customSubject || bookMetadata.subject || 'Unknown', 
+          class: customGrade || bookMetadata.class || 'General' 
+        };
+
+        // Only use AI if we are missing critical info and user didn't provide it in the line
+        if ((!customGrade || !customSubject || !customTitle) && !bookMetadata.subject && !bookMetadata.class) {
+          try {
+            const reader = new FileReader();
+            const firstPart = blob.slice(0, 1024 * 1024); // First 1MB
+            const base64 = await new Promise<string>((resolve) => {
+              reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
+              reader.readAsDataURL(firstPart);
+            });
+            
+            const identified = await identifyBookMetadata(fileName, base64);
+            metadata = {
+              title: customTitle || identified.title || fallbackTitle,
+              subject: customSubject || bookMetadata.subject || identified.subject || 'Unknown',
+              class: customGrade || bookMetadata.class || identified.class || 'General'
+            };
+          } catch (metaErr) {
+            console.warn("Metadata identification failed, using fallback", metaErr);
+          }
+        }
+
+        const fileExt = 'pdf';
+        const storageFileName = `${Math.random()}.${fileExt}`;
+        const filePath = `${metadata.class}/${storageFileName}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from('books')
+          .upload(filePath, blob);
+
+        if (uploadError) throw uploadError;
+
+        const { error: insertError } = await supabase
+          .from('books')
+          .insert({
+            title: metadata.title,
+            subject: metadata.subject,
+            class: metadata.class,
+            file_path: filePath
+          });
+
+        if (insertError) throw insertError;
+        successCount++;
+      } catch (err) {
+        console.error(`Bulk upload failed for ${line}:`, err);
+        failCount++;
+      }
+    }
+
+    setSuccess(`Bulk upload complete: ${successCount} successful, ${failCount} failed.`);
+    setBulkUrls('');
+    setIsProcessing(false);
+    fetchAllBooks();
+    fetchGrades();
   };
 
   const analyzeExistingBook = async (book: Book) => {
@@ -1088,56 +1234,83 @@ export default function App() {
                 </div>
                 <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-xl w-fit">
                   <button 
-                    onClick={() => setOverwriteMode(false)} 
-                    className={cn("px-4 py-1.5 rounded-lg text-sm font-bold transition-all", !overwriteMode ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500")}
+                    onClick={() => { setOverwriteMode(false); setIsBulkMode(false); }} 
+                    className={cn("px-4 py-1.5 rounded-lg text-sm font-bold transition-all", (!overwriteMode && !isBulkMode) ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500")}
                   >
                     New Book
                   </button>
                   <button 
-                    onClick={() => setOverwriteMode(true)} 
-                    className={cn("px-4 py-1.5 rounded-lg text-sm font-bold transition-all", overwriteMode ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500")}
+                    onClick={() => { setOverwriteMode(true); setIsBulkMode(false); }} 
+                    className={cn("px-4 py-1.5 rounded-lg text-sm font-bold transition-all", (overwriteMode && !isBulkMode) ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500")}
                   >
                     Overwrite
+                  </button>
+                  <button 
+                    onClick={() => { setIsBulkMode(true); setOverwriteMode(false); }} 
+                    className={cn("px-4 py-1.5 rounded-lg text-sm font-bold transition-all", isBulkMode ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500")}
+                  >
+                    Bulk Links
                   </button>
                 </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
                 <div className="space-y-6">
-                  <div className="relative group">
-                    <input type="file" accept=".pdf" onChange={handleFileChange} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
-                    <div className={cn("border-2 border-dashed rounded-2xl p-10 transition-all flex flex-col items-center justify-center gap-4", file ? "border-indigo-400 bg-indigo-50" : "border-slate-300 group-hover:border-indigo-400 group-hover:bg-slate-50")}>
-                      <div className={cn("p-4 rounded-full", file ? "bg-indigo-100 text-indigo-600" : "bg-slate-100 text-slate-400")}><Upload className="w-8 h-8" /></div>
-                      <p className="font-bold text-slate-700 text-center">{file ? file.name : "Click or drag PDF here"}</p>
-                      <p className="text-xs text-slate-400 tracking-wide uppercase font-bold">PDF Format Only</p>
-                    </div>
-                  </div>
-
-                  <div className="relative">
-                    <div className="absolute inset-0 flex items-center" aria-hidden="true">
-                      <div className="w-full border-t border-slate-200"></div>
-                    </div>
-                    <div className="relative flex justify-center text-xs uppercase">
-                      <span className="bg-white px-2 text-slate-400 font-bold tracking-widest">OR PASTE URL</span>
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <div className="relative">
-                      <LinkIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                      <input 
-                        type="url" 
-                        placeholder="https://example.com/book.pdf" 
-                        value={bookUrl}
-                        onChange={e => {
-                          setBookUrl(e.target.value);
-                          if (e.target.value) setFile(null); // Clear file if URL is pasted
-                        }}
-                        className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                  {isBulkMode ? (
+                    <div className="space-y-4">
+                      <div className="flex items-center gap-2 text-indigo-600 font-bold mb-2">
+                        <Layers className="w-5 h-5" />
+                        <span>Bulk URL Upload</span>
+                      </div>
+                      <textarea
+                        placeholder="Format: URL | Grade | Subject | Title (one per line)
+Example: https://site.com/book.pdf | 10 | Science | Physics Part 1"
+                        value={bulkUrls}
+                        onChange={(e) => setBulkUrls(e.target.value)}
+                        className="w-full h-64 p-4 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-mono text-sm"
                       />
+                      <p className="text-xs text-slate-400 italic">
+                        Use the pipe symbol (|) to separate details. If you only provide the URL, AI will try to identify the rest.
+                      </p>
                     </div>
-                    <p className="text-[10px] text-slate-400 italic ml-1">Note: URL must be direct link to a public PDF file.</p>
-                  </div>
+                  ) : (
+                    <>
+                      <div className="relative group">
+                        <input type="file" accept=".pdf" onChange={handleFileChange} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
+                        <div className={cn("border-2 border-dashed rounded-2xl p-10 transition-all flex flex-col items-center justify-center gap-4", file ? "border-indigo-400 bg-indigo-50" : "border-slate-300 group-hover:border-indigo-400 group-hover:bg-slate-50")}>
+                          <div className={cn("p-4 rounded-full", file ? "bg-indigo-100 text-indigo-600" : "bg-slate-100 text-slate-400")}><Upload className="w-8 h-8" /></div>
+                          <p className="font-bold text-slate-700 text-center">{file ? file.name : "Click or drag PDF here"}</p>
+                          <p className="text-xs text-slate-400 tracking-wide uppercase font-bold">PDF Format Only</p>
+                        </div>
+                      </div>
+
+                      <div className="relative">
+                        <div className="absolute inset-0 flex items-center" aria-hidden="true">
+                          <div className="w-full border-t border-slate-200"></div>
+                        </div>
+                        <div className="relative flex justify-center text-xs uppercase">
+                          <span className="bg-white px-2 text-slate-400 font-bold tracking-widest">OR PASTE URL</span>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="relative">
+                          <LinkIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                          <input 
+                            type="url" 
+                            placeholder="https://example.com/book.pdf" 
+                            value={bookUrl}
+                            onChange={e => {
+                              setBookUrl(e.target.value);
+                              if (e.target.value) setFile(null); // Clear file if URL is pasted
+                            }}
+                            className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                          />
+                        </div>
+                        <p className="text-[10px] text-slate-400 italic ml-1">Note: URL must be direct link to a public PDF file.</p>
+                      </div>
+                    </>
+                  )}
 
                   {overwriteMode ? (
                     <div className="space-y-4 bg-slate-50 p-6 rounded-2xl border border-slate-100">
@@ -1203,11 +1376,36 @@ export default function App() {
                     </div>
                     <button 
                       onClick={uploadBookOnly} 
-                      disabled={(!file && !bookUrl) || isProcessing || (overwriteMode && !selectedBookToOverwrite) || (!overwriteMode && (!bookMetadata.title || !bookMetadata.subject || !bookMetadata.class))}
+                      disabled={isProcessing || (!isBulkMode && !file && !bookUrl) || (isBulkMode && !bulkUrls) || (overwriteMode && !selectedBookToOverwrite) || (!overwriteMode && !isBulkMode && (!bookMetadata.title || !bookMetadata.subject || !bookMetadata.class))}
                       className="w-full py-4 rounded-2xl font-bold text-lg bg-indigo-600 text-white hover:bg-indigo-700 shadow-lg shadow-indigo-100 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      {isProcessing ? <Loader2 className="w-6 h-6 animate-spin" /> : <><Save className="w-6 h-6" /> Upload to Library</>}
+                      {isProcessing ? (
+                        <div className="flex flex-col items-center">
+                          <Loader2 className="w-6 h-6 animate-spin" />
+                          <span className="text-[10px] mt-1 font-normal opacity-80">
+                            {isBulkMode ? `Processing ${bulkProgress}/${bulkTotal}` : 'Identifying & Uploading...'}
+                          </span>
+                        </div>
+                      ) : (
+                        <><Save className="w-6 h-6" /> {isBulkMode ? 'Bulk Upload to Library' : 'Upload to Library'}</>
+                      )}
                     </button>
+
+                    {isProcessing && bulkTotal > 0 && (
+                      <div className="mt-4 space-y-2">
+                        <div className="flex justify-between text-xs font-bold text-slate-500 uppercase">
+                          <span>Processing Bulk Upload</span>
+                          <span>{bulkProgress} / {bulkTotal}</span>
+                        </div>
+                        <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                          <motion.div 
+                            initial={{ width: 0 }}
+                            animate={{ width: `${(bulkProgress / bulkTotal) * 100}%` }}
+                            className="h-full bg-indigo-600"
+                          />
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>

@@ -167,6 +167,56 @@ export async function extractFullBookReaderContent(pdfBase64: string): Promise<P
   }
 }
 
+export async function identifyBookMetadata(filename: string, pdfBase64?: string): Promise<{ title: string, subject: string, class: string }> {
+  const parts: any[] = [
+    {
+      text: `Identify the Grade/Class, Subject, and a clean Title for this textbook.
+      
+      Filename: ${filename}
+      
+      Return a JSON object with:
+      - title: Clean book title
+      - subject: The subject (e.g., Mathematics, Science, Nepali)
+      - class: The grade or class level (e.g., 10, 12, Grade 5)
+      
+      If you can't identify one, use "General" for class and "Unknown" for subject.`
+    }
+  ];
+
+  if (pdfBase64) {
+    parts.unshift({
+      inlineData: {
+        mimeType: "application/pdf",
+        data: pdfBase64,
+      },
+    });
+  }
+
+  const response = await callGeminiWithRetry({
+    model: "gemini-3-flash-preview",
+    contents: [{ parts }],
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          title: { type: Type.STRING },
+          subject: { type: Type.STRING },
+          class: { type: Type.STRING }
+        },
+        required: ["title", "subject", "class"]
+      }
+    },
+  });
+
+  try {
+    return JSON.parse(response.text || '{"title": "", "subject": "Unknown", "class": "General"}');
+  } catch (e) {
+    console.error("Failed to parse metadata identification", e);
+    return { title: filename, subject: "Unknown", class: "General" };
+  }
+}
+
 export async function searchBookContents(
   query: string,
   bookId: string,
