@@ -4,7 +4,8 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Upload, FileText, Loader2, Save, CheckCircle2, AlertCircle, ChevronDown, ChevronUp, Printer, BookOpen, Sparkles, List, GraduationCap, Book as BookIcon, Folder, RefreshCw, Trash2, Eye, Copy, Search, X } from 'lucide-react';
+import { Routes, Route, Link, NavLink, useNavigate, useLocation, Navigate } from 'react-router-dom';
+import { Upload, FileText, Loader2, Save, CheckCircle2, AlertCircle, ChevronDown, ChevronUp, Printer, BookOpen, Sparkles, List, GraduationCap, Book as BookIcon, Folder, RefreshCw, Trash2, Eye, Copy, Search, X, Menu } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { parseBookPDF, generatePlanFromContent, generatePlanFromPDFAndTopic } from './services/geminiService';
 import { getSupabase } from './lib/supabase';
@@ -12,7 +13,10 @@ import { LessonPlan, Book, BookContent } from './types';
 import { cn } from './lib/utils';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'upload' | 'analyze' | 'books' | 'generator' | 'lesson-plans'>('upload');
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  
   const [file, setFile] = useState<File | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -318,7 +322,7 @@ export default function App() {
       setSelectedBookToOverwrite('');
       fetchGrades();
       fetchAllBooks();
-      setActiveTab('books');
+      navigate('/books');
     } catch (err) {
       console.error(err);
       setError(err instanceof Error ? err.message : 'Failed to upload book.');
@@ -330,7 +334,7 @@ export default function App() {
   const analyzeExistingBook = async (book: Book) => {
     if (!book.file_path) return;
     setBookToAnalyze(book);
-    setActiveTab('analyze');
+    navigate('/analyze');
     setIsProcessing(true);
     setError(null);
     setParsedContents([]);
@@ -411,7 +415,7 @@ export default function App() {
       setSuccess(`Successfully saved ${parsedContents.length} topics to "${bookToAnalyze.title}"!`);
       setParsedContents([]);
       setBookToAnalyze(null);
-      setActiveTab('books');
+      navigate('/books');
     } catch (err) {
       console.error(err);
       setError(err instanceof Error ? err.message : 'Failed to save extraction.');
@@ -840,712 +844,767 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-10">
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-30">
         <div className="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="bg-indigo-600 p-2 rounded-lg"><FileText className="text-white w-6 h-6" /></div>
-            <h1 className="text-xl font-bold tracking-tight text-slate-800">AI Lesson Planner</h1>
-          </div>
-          <nav className="flex bg-slate-100 p-1 rounded-lg">
-            <button onClick={() => setActiveTab('upload')} className={cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", (activeTab === 'upload' || activeTab === 'analyze') ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Upload</button>
-            <button onClick={() => setActiveTab('books')} className={cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", activeTab === 'books' ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Books</button>
-            <button onClick={() => setActiveTab('generator')} className={cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", activeTab === 'generator' ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Generator</button>
-            <button onClick={() => setActiveTab('lesson-plans')} className={cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", activeTab === 'lesson-plans' ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Lesson Plans</button>
+          <Link to="/" className="flex items-center gap-2">
+            <div className="bg-indigo-600 p-2 rounded-lg"><FileText className="text-white w-5 h-5 sm:w-6 sm:h-6" /></div>
+            <h1 className="text-lg sm:text-xl font-bold tracking-tight text-slate-800">AI Lesson Planner</h1>
+          </Link>
+          
+          {/* Desktop Nav */}
+          <nav className="hidden md:flex bg-slate-100 p-1 rounded-lg">
+            <NavLink to="/" className={({isActive}) => cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", isActive ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Upload</NavLink>
+            <NavLink to="/books" className={({isActive}) => cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", isActive ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Books</NavLink>
+            <NavLink to="/generator" className={({isActive}) => cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", isActive ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Generator</NavLink>
+            <NavLink to="/lesson-plans" className={({isActive}) => cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", isActive ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Lesson Plans</NavLink>
           </nav>
+
+          {/* Mobile Menu Button */}
+          <button 
+            onClick={() => setIsMenuOpen(!isMenuOpen)}
+            className="md:hidden p-2 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-all"
+          >
+            {isMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
+          </button>
         </div>
+
+        {/* Mobile Nav */}
+        <AnimatePresence>
+          {isMenuOpen && (
+            <motion.div 
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              className="md:hidden bg-white border-t border-slate-100 overflow-hidden"
+            >
+              <nav className="flex flex-col p-4 gap-2">
+                <NavLink 
+                  to="/" 
+                  onClick={() => setIsMenuOpen(false)}
+                  className={({isActive}) => cn("px-4 py-3 rounded-xl text-sm font-bold transition-all flex items-center gap-3", isActive ? "bg-indigo-50 text-indigo-600" : "text-slate-500 hover:bg-slate-50")}
+                >
+                  <Upload className="w-5 h-5" /> Upload
+                </NavLink>
+                <NavLink 
+                  to="/books" 
+                  onClick={() => setIsMenuOpen(false)}
+                  className={({isActive}) => cn("px-4 py-3 rounded-xl text-sm font-bold transition-all flex items-center gap-3", isActive ? "bg-indigo-50 text-indigo-600" : "text-slate-500 hover:bg-slate-50")}
+                >
+                  <BookIcon className="w-5 h-5" /> Books
+                </NavLink>
+                <NavLink 
+                  to="/generator" 
+                  onClick={() => setIsMenuOpen(false)}
+                  className={({isActive}) => cn("px-4 py-3 rounded-xl text-sm font-bold transition-all flex items-center gap-3", isActive ? "bg-indigo-50 text-indigo-600" : "text-slate-500 hover:bg-slate-50")}
+                >
+                  <Sparkles className="w-5 h-5" /> Generator
+                </NavLink>
+                <NavLink 
+                  to="/lesson-plans" 
+                  onClick={() => setIsMenuOpen(false)}
+                  className={({isActive}) => cn("px-4 py-3 rounded-xl text-sm font-bold transition-all flex items-center gap-3", isActive ? "bg-indigo-50 text-indigo-600" : "text-slate-500 hover:bg-slate-50")}
+                >
+                  <FileText className="w-5 h-5" /> Lesson Plans
+                </NavLink>
+              </nav>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </header>
 
       <main className="max-w-5xl mx-auto px-4 py-8">
-        <AnimatePresence>
+        <AnimatePresence mode="wait">
           {error && <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="mb-6 p-4 bg-red-50 border border-red-100 text-red-600 rounded-xl flex items-center gap-3"><AlertCircle className="w-5 h-5" />{error}</motion.div>}
           {success && <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="mb-6 p-4 bg-emerald-50 border border-emerald-100 text-emerald-600 rounded-xl flex items-center gap-3"><CheckCircle2 className="w-5 h-5" />{success}</motion.div>}
         </AnimatePresence>
 
-        {activeTab === 'upload' && (
-          <section className="bg-white rounded-2xl border border-slate-200 p-8 shadow-sm max-w-4xl mx-auto">
-            <div className="flex items-center justify-between mb-8">
-              <div>
-                <h2 className="text-2xl font-bold text-slate-800">Upload Textbook</h2>
-                <p className="text-slate-500">Extract lessons from PDF and store in database.</p>
-              </div>
-              <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-xl">
-                <button 
-                  onClick={() => setOverwriteMode(false)} 
-                  className={cn("px-4 py-1.5 rounded-lg text-sm font-bold transition-all", !overwriteMode ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500")}
-                >
-                  New Book
-                </button>
-                <button 
-                  onClick={() => setOverwriteMode(true)} 
-                  className={cn("px-4 py-1.5 rounded-lg text-sm font-bold transition-all", overwriteMode ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500")}
-                >
-                  Overwrite
-                </button>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
-              <div className="space-y-6">
-                <div className="relative group">
-                  <input type="file" accept=".pdf" onChange={handleFileChange} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
-                  <div className={cn("border-2 border-dashed rounded-2xl p-10 transition-all flex flex-col items-center justify-center gap-4", file ? "border-indigo-400 bg-indigo-50" : "border-slate-300 group-hover:border-indigo-400 group-hover:bg-slate-50")}>
-                    <div className={cn("p-4 rounded-full", file ? "bg-indigo-100 text-indigo-600" : "bg-slate-100 text-slate-400")}><Upload className="w-8 h-8" /></div>
-                    <p className="font-bold text-slate-700 text-center">{file ? file.name : "Click or drag PDF here"}</p>
-                    <p className="text-xs text-slate-400 tracking-wide uppercase font-bold">PDF Format Only</p>
-                  </div>
+        <Routes>
+          <Route path="/" element={
+            <section className="bg-white rounded-2xl border border-slate-200 p-8 shadow-sm max-w-4xl mx-auto">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
+                <div>
+                  <h2 className="text-2xl font-bold text-slate-800">Upload Textbook</h2>
+                  <p className="text-slate-500">Extract lessons from PDF and store in database.</p>
                 </div>
+                <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-xl w-fit">
+                  <button 
+                    onClick={() => setOverwriteMode(false)} 
+                    className={cn("px-4 py-1.5 rounded-lg text-sm font-bold transition-all", !overwriteMode ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500")}
+                  >
+                    New Book
+                  </button>
+                  <button 
+                    onClick={() => setOverwriteMode(true)} 
+                    className={cn("px-4 py-1.5 rounded-lg text-sm font-bold transition-all", overwriteMode ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500")}
+                  >
+                    Overwrite
+                  </button>
+                </div>
+              </div>
 
-                {overwriteMode ? (
-                  <div className="space-y-4 bg-slate-50 p-6 rounded-2xl border border-slate-100">
-                    <h3 className="text-sm font-bold text-slate-500 uppercase flex items-center gap-2"><RefreshCw className="w-4 h-4" /> Select Book to Replace</h3>
-                    <div className="space-y-3">
-                      <select 
-                        value={selectedGrade} 
-                        onChange={e => setSelectedGrade(e.target.value)}
-                        className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                      >
-                        <option value="">-- Select Grade --</option>
-                        {availableGrades.map((g, i) => <option key={`up-g-${g}-${i}`} value={g}>{g}</option>)}
-                      </select>
-                      <select 
-                        value={selectedSubject} 
-                        onChange={e => setSelectedSubject(e.target.value)}
-                        disabled={!selectedGrade}
-                        className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:opacity-50"
-                      >
-                        <option value="">-- Select Subject --</option>
-                        {availableSubjects.map((s, i) => <option key={`up-s-${s}-${i}`} value={s}>{s}</option>)}
-                      </select>
-                      <select 
-                        value={selectedBookToOverwrite} 
-                        onChange={e => {
-                          const bookId = e.target.value;
-                          setSelectedBookToOverwrite(bookId);
-                          const book = availableBooks.find(b => b.id === bookId);
-                          if (book) {
-                            setBookMetadata({ title: book.title, subject: book.subject, class: book.class });
-                          }
-                        }}
-                        disabled={!selectedSubject}
-                        className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:opacity-50"
-                      >
-                        <option value="">-- Select Book --</option>
-                        {availableBooks.map((b, i) => <option key={`up-b-${b.id}`} value={b.id}>{b.title}</option>)}
-                      </select>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
+                <div className="space-y-6">
+                  <div className="relative group">
+                    <input type="file" accept=".pdf" onChange={handleFileChange} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
+                    <div className={cn("border-2 border-dashed rounded-2xl p-10 transition-all flex flex-col items-center justify-center gap-4", file ? "border-indigo-400 bg-indigo-50" : "border-slate-300 group-hover:border-indigo-400 group-hover:bg-slate-50")}>
+                      <div className={cn("p-4 rounded-full", file ? "bg-indigo-100 text-indigo-600" : "bg-slate-100 text-slate-400")}><Upload className="w-8 h-8" /></div>
+                      <p className="font-bold text-slate-700 text-center">{file ? file.name : "Click or drag PDF here"}</p>
+                      <p className="text-xs text-slate-400 tracking-wide uppercase font-bold">PDF Format Only</p>
                     </div>
                   </div>
+
+                  {overwriteMode ? (
+                    <div className="space-y-4 bg-slate-50 p-6 rounded-2xl border border-slate-100">
+                      <h3 className="text-sm font-bold text-slate-500 uppercase flex items-center gap-2"><RefreshCw className="w-4 h-4" /> Select Book to Replace</h3>
+                      <div className="space-y-3">
+                        <select 
+                          value={selectedGrade} 
+                          onChange={e => setSelectedGrade(e.target.value)}
+                          className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                        >
+                          <option value="">-- Select Grade --</option>
+                          {availableGrades.map((g, i) => <option key={`up-g-${g}-${i}`} value={g}>{g}</option>)}
+                        </select>
+                        <select 
+                          value={selectedSubject} 
+                          onChange={e => setSelectedSubject(e.target.value)}
+                          disabled={!selectedGrade}
+                          className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:opacity-50"
+                        >
+                          <option value="">-- Select Subject --</option>
+                          {availableSubjects.map((s, i) => <option key={`up-s-${s}-${i}`} value={s}>{s}</option>)}
+                        </select>
+                        <select 
+                          value={selectedBookToOverwrite} 
+                          onChange={e => {
+                            const bookId = e.target.value;
+                            setSelectedBookToOverwrite(bookId);
+                            const book = availableBooks.find(b => b.id === bookId);
+                            if (book) {
+                              setBookMetadata({ title: book.title, subject: book.subject, class: book.class });
+                            }
+                          }}
+                          disabled={!selectedSubject}
+                          className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:opacity-50"
+                        >
+                          <option value="">-- Select Book --</option>
+                          {availableBooks.map((b, i) => <option key={`up-b-${b.id}`} value={b.id}>{b.title}</option>)}
+                        </select>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-4 bg-slate-50 p-6 rounded-2xl border border-slate-100">
+                      <h3 className="text-sm font-bold text-slate-500 uppercase flex items-center gap-2"><FileText className="w-4 h-4" /> Book Details</h3>
+                      <div className="space-y-3">
+                        <input type="text" placeholder="Grade/Class (e.g. 10)" value={bookMetadata.class} onChange={e => setBookMetadata({...bookMetadata, class: e.target.value})} className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none" />
+                        <input type="text" placeholder="Subject (e.g. Science)" value={bookMetadata.subject} onChange={e => setBookMetadata({...bookMetadata, subject: e.target.value})} className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none" />
+                        <input type="text" placeholder="Book Title" value={bookMetadata.title} onChange={e => setBookMetadata({...bookMetadata, title: e.target.value})} className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none" />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex flex-col justify-center">
+                  <div className="bg-indigo-50/50 rounded-3xl p-8 border border-indigo-100 text-center space-y-6">
+                    <div className="bg-white w-16 h-16 rounded-2xl shadow-sm flex items-center justify-center mx-auto text-indigo-600">
+                      <Sparkles className="w-8 h-8" />
+                    </div>
+                    <div>
+                      <h3 className="text-xl font-bold text-slate-800 mb-2">Upload to Library</h3>
+                      <p className="text-slate-500 text-sm leading-relaxed">
+                        Upload your book PDF to the library. You can identify units, chapters, and topics later from the Book Library tab.
+                      </p>
+                    </div>
+                    <button 
+                      onClick={uploadBookOnly} 
+                      disabled={!file || isProcessing || (overwriteMode && !selectedBookToOverwrite) || (!overwriteMode && (!bookMetadata.title || !bookMetadata.subject || !bookMetadata.class))}
+                      className="w-full py-4 rounded-2xl font-bold text-lg bg-indigo-600 text-white hover:bg-indigo-700 shadow-lg shadow-indigo-100 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {isProcessing ? <Loader2 className="w-6 h-6 animate-spin" /> : <><Save className="w-6 h-6" /> Upload to Library</>}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </section>
+          } />
+
+          <Route path="/analyze" element={
+            <section className="max-w-4xl mx-auto space-y-8">
+              <div className="bg-white rounded-2xl border border-slate-200 p-8 shadow-sm">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
+                  <div>
+                    <h2 className="text-2xl font-bold text-slate-800">Review Extraction</h2>
+                    <p className="text-slate-500">AI analysis of {bookToAnalyze?.title || file?.name}</p>
+                  </div>
+                  <button 
+                    onClick={() => navigate('/')}
+                    className="text-sm font-bold text-slate-400 hover:text-slate-600 flex items-center gap-1 w-fit"
+                  >
+                    Back to Upload
+                  </button>
+                </div>
+
+                {isProcessing ? (
+                  <div className="flex flex-col items-center justify-center py-20">
+                    <Loader2 className="w-12 h-12 text-indigo-600 animate-spin mb-4" />
+                    <p className="text-slate-500 font-medium">AI is analyzing your book... This may take a minute.</p>
+                  </div>
                 ) : (
-                  <div className="space-y-4 bg-slate-50 p-6 rounded-2xl border border-slate-100">
-                    <h3 className="text-sm font-bold text-slate-500 uppercase flex items-center gap-2"><FileText className="w-4 h-4" /> Book Details</h3>
-                    <div className="space-y-3">
-                      <input type="text" placeholder="Grade/Class (e.g. 10)" value={bookMetadata.class} onChange={e => setBookMetadata({...bookMetadata, class: e.target.value})} className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none" />
-                      <input type="text" placeholder="Subject (e.g. Science)" value={bookMetadata.subject} onChange={e => setBookMetadata({...bookMetadata, subject: e.target.value})} className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none" />
-                      <input type="text" placeholder="Book Title" value={bookMetadata.title} onChange={e => setBookMetadata({...bookMetadata, title: e.target.value})} className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none" />
+                  <div className="space-y-6">
+                    <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200">
+                      <div className="flex items-center justify-between mb-4">
+                        <h4 className="font-bold text-slate-800 flex items-center gap-2"><List className="w-5 h-5" /> Extracted Structure</h4>
+                        <span className="bg-indigo-100 text-indigo-600 px-3 py-1 rounded-full text-xs font-bold">{parsedContents.length} Topics Found</span>
+                      </div>
+                      <div className="max-h-[400px] overflow-y-auto space-y-2 pr-2 custom-scrollbar">
+                        {parsedContents.map((c, i) => (
+                          <div key={`parsed-${i}`} className="p-4 bg-white rounded-xl border border-slate-100 shadow-sm flex items-start gap-4">
+                            <div className="bg-slate-50 px-2 py-1 rounded text-[10px] font-bold text-slate-400 uppercase mt-1">Topic {i+1}</div>
+                            <div>
+                              <div className="font-bold text-slate-700">{c.unit} - {c.lesson}</div>
+                              <div className="text-sm text-slate-500">{c.topic}</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row gap-4">
+                      <button 
+                        onClick={() => navigate('/')}
+                        className="flex-1 py-4 rounded-xl font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 transition-all"
+                      >
+                        Cancel
+                      </button>
+                      <button 
+                        onClick={saveExtractedContents} 
+                        disabled={isProcessing || parsedContents.length === 0}
+                        className="flex-[2] py-4 rounded-xl font-bold text-lg bg-emerald-600 text-white hover:bg-emerald-700 shadow-lg shadow-emerald-100 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                      >
+                        {isProcessing ? <Loader2 className="w-6 h-6 animate-spin" /> : <><Save className="w-6 h-6" /> Save Extraction</>}
+                      </button>
                     </div>
                   </div>
                 )}
               </div>
+            </section>
+          } />
 
-              <div className="flex flex-col justify-center">
-                <div className="bg-indigo-50/50 rounded-3xl p-8 border border-indigo-100 text-center space-y-6">
-                  <div className="bg-white w-16 h-16 rounded-2xl shadow-sm flex items-center justify-center mx-auto text-indigo-600">
-                    <Sparkles className="w-8 h-8" />
-                  </div>
-                  <div>
-                    <h3 className="text-xl font-bold text-slate-800 mb-2">Upload to Library</h3>
-                    <p className="text-slate-500 text-sm leading-relaxed">
-                      Upload your book PDF to the library. You can identify units, chapters, and topics later from the Book Library tab.
-                    </p>
-                  </div>
-                  <button 
-                    onClick={uploadBookOnly} 
-                    disabled={!file || isProcessing || (overwriteMode && !selectedBookToOverwrite) || (!overwriteMode && (!bookMetadata.title || !bookMetadata.subject || !bookMetadata.class))}
-                    className="w-full py-4 rounded-2xl font-bold text-lg bg-indigo-600 text-white hover:bg-indigo-700 shadow-lg shadow-indigo-100 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {isProcessing ? <Loader2 className="w-6 h-6 animate-spin" /> : <><Save className="w-6 h-6" /> Upload to Library</>}
-                  </button>
-                </div>
+          <Route path="/books" element={
+            <div className="space-y-8">
+              <div className="flex items-center justify-between">
+                <h2 className="text-2xl font-bold text-slate-800">Book Library</h2>
+                <p className="text-sm text-slate-500 hidden sm:block">Organized by Grade</p>
               </div>
-            </div>
-          </section>
-        )}
-
-        {activeTab === 'analyze' && (
-          <section className="max-w-4xl mx-auto space-y-8">
-            <div className="bg-white rounded-2xl border border-slate-200 p-8 shadow-sm">
-              <div className="flex items-center justify-between mb-8">
-                <div>
-                  <h2 className="text-2xl font-bold text-slate-800">Review Extraction</h2>
-                  <p className="text-slate-500">AI analysis of {bookToAnalyze?.title || file?.name}</p>
-                </div>
-                <button 
-                  onClick={() => {
-                    setBookToAnalyze(null);
-                    setActiveTab('upload');
-                  }}
-                  className="text-sm font-bold text-slate-400 hover:text-slate-600 flex items-center gap-1"
-                >
-                  Back to Upload
-                </button>
-              </div>
-
-              {isProcessing ? (
-                <div className="flex flex-col items-center justify-center py-20">
-                  <Loader2 className="w-12 h-12 text-indigo-600 animate-spin mb-4" />
-                  <p className="text-slate-500 font-medium">AI is analyzing your book... This may take a minute.</p>
-                </div>
-              ) : (
-                <div className="space-y-6">
-                  <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200">
-                    <div className="flex items-center justify-between mb-4">
-                      <h4 className="font-bold text-slate-800 flex items-center gap-2"><List className="w-5 h-5" /> Extracted Structure</h4>
-                      <span className="bg-indigo-100 text-indigo-600 px-3 py-1 rounded-full text-xs font-bold">{parsedContents.length} Topics Found</span>
-                    </div>
-                    <div className="max-h-[400px] overflow-y-auto space-y-2 pr-2 custom-scrollbar">
-                      {parsedContents.map((c, i) => (
-                        <div key={`parsed-${i}`} className="p-4 bg-white rounded-xl border border-slate-100 shadow-sm flex items-start gap-4">
-                          <div className="bg-slate-50 px-2 py-1 rounded text-[10px] font-bold text-slate-400 uppercase mt-1">Topic {i+1}</div>
-                          <div>
-                            <div className="font-bold text-slate-700">{c.unit} - {c.lesson}</div>
-                            <div className="text-sm text-slate-500">{c.topic}</div>
+              
+              {Array.from(new Set(allBooks.map(b => b.class))).filter(Boolean).sort().map((grade, gIdx) => (
+                <div key={`grade-group-${grade}-${gIdx}`} className="space-y-4">
+                  <div className="flex items-center gap-2 text-slate-400">
+                    <Folder className="w-5 h-5" />
+                    <h3 className="font-bold text-slate-700">Grade {grade}</h3>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pl-0 sm:pl-7">
+                    {allBooks.filter(b => b.class === grade).map((book, bIdx) => (
+                      <div key={`book-card-${book.id}-${bIdx}`} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-all group">
+                        <div className="flex items-start justify-between">
+                          <div className="flex items-center gap-3">
+                            <div className="bg-indigo-50 p-2 rounded-lg text-indigo-600">
+                              <BookIcon className="w-5 h-5" />
+                            </div>
+                            <div>
+                              <h4 className="font-bold text-slate-800 line-clamp-1">{book.title}</h4>
+                              <p className="text-xs text-slate-500">{book.subject}</p>
+                            </div>
                           </div>
+                          <button 
+                            onClick={() => deleteBook(book.id!)} 
+                            className="text-slate-300 hover:text-red-500 md:opacity-0 md:group-hover:opacity-100 transition-all"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
                         </div>
-                      ))}
-                    </div>
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          <button 
+                            onClick={() => book.file_path && viewPdf(book.file_path)}
+                            className="text-xs font-bold text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 px-3 py-1.5 rounded-lg transition-all flex items-center gap-1"
+                          >
+                            <FileText className="w-3 h-3" /> View
+                          </button>
+                          <button 
+                            onClick={() => analyzeExistingBook(book)}
+                            className="text-xs font-bold text-indigo-600 hover:bg-indigo-50 px-3 py-1.5 rounded-lg transition-all flex items-center gap-1"
+                          >
+                            <Sparkles className="w-3 h-3" /> Analyze
+                          </button>
+                          <button 
+                            onClick={() => {
+                              setSelectedGrade(book.class);
+                              setSelectedSubject(book.subject);
+                              setSelectedBook(book);
+                              navigate('/generator');
+                            }}
+                            className="text-xs font-bold text-slate-600 hover:bg-slate-50 px-3 py-1.5 rounded-lg transition-all"
+                          >
+                            Generate Plans
+                          </button>
+                        </div>
+                      </div>
+                    ))}
                   </div>
+                </div>
+              ))}
 
-                  <div className="flex gap-4">
-                    <button 
-                      onClick={() => setActiveTab('upload')}
-                      className="flex-1 py-4 rounded-xl font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 transition-all"
-                    >
-                      Cancel
-                    </button>
-                    <button 
-                      onClick={saveExtractedContents} 
-                      disabled={isProcessing || parsedContents.length === 0}
-                      className="flex-[2] py-4 rounded-xl font-bold text-lg bg-emerald-600 text-white hover:bg-emerald-700 shadow-lg shadow-emerald-100 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
-                    >
-                      {isProcessing ? <Loader2 className="w-6 h-6 animate-spin" /> : <><Save className="w-6 h-6" /> Save Extraction</>}
-                    </button>
-                  </div>
+              {allBooks.length === 0 && (
+                <div className="text-center py-20 bg-white rounded-2xl border border-slate-200 border-dashed">
+                  <BookOpen className="w-12 h-12 text-slate-200 mx-auto mb-4" />
+                  <p className="text-slate-400">No books uploaded yet. Go to the Upload tab to start.</p>
                 </div>
               )}
             </div>
-          </section>
-        )}
+          } />
 
-        {activeTab === 'books' && (
-          <div className="space-y-8">
-            <div className="flex items-center justify-between">
-              <h2 className="text-2xl font-bold text-slate-800">Book Library</h2>
-              <p className="text-sm text-slate-500">Organized by Grade</p>
-            </div>
-            
-            {Array.from(new Set(allBooks.map(b => b.class))).filter(Boolean).sort().map((grade, gIdx) => (
-              <div key={`grade-group-${grade}-${gIdx}`} className="space-y-4">
-                <div className="flex items-center gap-2 text-slate-400">
-                  <Folder className="w-5 h-5" />
-                  <h3 className="font-bold text-slate-700">Grade {grade}</h3>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 pl-7">
-                  {allBooks.filter(b => b.class === grade).map((book, bIdx) => (
-                    <div key={`book-card-${book.id}-${bIdx}`} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-all group">
-                      <div className="flex items-start justify-between">
-                        <div className="flex items-center gap-3">
-                          <div className="bg-indigo-50 p-2 rounded-lg text-indigo-600">
-                            <BookIcon className="w-5 h-5" />
-                          </div>
-                          <div>
-                            <h4 className="font-bold text-slate-800 line-clamp-1">{book.title}</h4>
-                            <p className="text-xs text-slate-500">{book.subject}</p>
-                          </div>
-                        </div>
-                        <button 
-                          onClick={() => deleteBook(book.id!)} 
-                          className="text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                      <div className="mt-4 flex gap-2">
-                        <button 
-                          onClick={() => book.file_path && viewPdf(book.file_path)}
-                          className="text-xs font-bold text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 px-3 py-1.5 rounded-lg transition-all flex items-center gap-1"
-                        >
-                          <FileText className="w-3 h-3" /> View
-                        </button>
-                        <button 
-                          onClick={() => analyzeExistingBook(book)}
-                          className="text-xs font-bold text-indigo-600 hover:bg-indigo-50 px-3 py-1.5 rounded-lg transition-all flex items-center gap-1"
-                        >
-                          <Sparkles className="w-3 h-3" /> Analyze
-                        </button>
-                        <button 
-                          onClick={() => {
-                            setSelectedGrade(book.class);
-                            setSelectedSubject(book.subject);
-                            setSelectedBook(book);
-                            setActiveTab('generator');
-                          }}
-                          className="text-xs font-bold text-slate-600 hover:bg-slate-50 px-3 py-1.5 rounded-lg transition-all"
-                        >
-                          Generate Plans
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-
-            {allBooks.length === 0 && (
-              <div className="text-center py-20 bg-white rounded-2xl border border-slate-200 border-dashed">
-                <BookOpen className="w-12 h-12 text-slate-200 mx-auto mb-4" />
-                <p className="text-slate-400">No books uploaded yet. Go to the Upload tab to start.</p>
-              </div>
-            )}
-          </div>
-        )}
-
-        {activeTab === 'generator' && (
-          <section className="space-y-8">
-            <div className="bg-white rounded-2xl border border-slate-200 p-8 shadow-sm">
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
-                <div className="flex items-center gap-4">
-                  <h2 className="text-2xl font-bold flex items-center gap-2"><Sparkles className="text-indigo-600 w-6 h-6" /> Lesson Plan Generator</h2>
-                  {selectedTopic && (
+          <Route path="/generator" element={
+            <section className="space-y-8">
+              <div className="bg-white rounded-2xl border border-slate-200 p-8 shadow-sm">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+                  <div className="flex items-center gap-4">
+                    <h2 className="text-2xl font-bold flex items-center gap-2"><Sparkles className="text-indigo-600 w-6 h-6" /> Lesson Plan Generator</h2>
+                    {selectedTopic && (
+                      <button 
+                        onClick={() => handleAutoGenerate(selectedTopic, true)}
+                        disabled={isGenerating}
+                        className="flex items-center gap-2 text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-lg hover:bg-indigo-100 transition-all disabled:opacity-50"
+                      >
+                        <RefreshCw className={cn("w-3 h-3", isGenerating && "animate-spin")} />
+                        Regenerate
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-xl w-fit">
                     <button 
-                      onClick={() => handleAutoGenerate(selectedTopic, true)}
-                      disabled={isGenerating}
-                      className="flex items-center gap-2 text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-lg hover:bg-indigo-100 transition-all disabled:opacity-50"
+                      onClick={() => setTargetLanguage('English')} 
+                      className={cn("px-4 py-1.5 rounded-lg text-sm font-bold transition-all", targetLanguage === 'English' ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500")}
                     >
-                      <RefreshCw className={cn("w-3 h-3", isGenerating && "animate-spin")} />
-                      Regenerate
+                      English
                     </button>
+                    <button 
+                      onClick={() => setTargetLanguage('Nepali')} 
+                      className={cn("px-4 py-1.5 rounded-lg text-sm font-bold transition-all", targetLanguage === 'Nepali' ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500")}
+                    >
+                      Nepali
+                    </button>
+                  </div>
+                </div>
+                
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                  {/* Grade Selector */}
+                  <div className="space-y-2">
+                    <label className="text-sm font-bold text-slate-500 uppercase flex items-center gap-2"><GraduationCap className="w-4 h-4" /> Grade</label>
+                    <select 
+                      value={selectedGrade} 
+                      onChange={e => setSelectedGrade(e.target.value)}
+                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                    >
+                      <option value="">-- Grade --</option>
+                      {availableGrades.map((g, i) => <option key={`sel-g-${g}-${i}`} value={g}>{g}</option>)}
+                    </select>
+                  </div>
+
+                  {/* Subject Selector */}
+                  <div className="space-y-2">
+                    <label className="text-sm font-bold text-slate-500 uppercase flex items-center gap-2"><BookIcon className="w-4 h-4" /> Subject</label>
+                    <select 
+                      value={selectedSubject} 
+                      onChange={e => setSelectedSubject(e.target.value)}
+                      disabled={!selectedGrade}
+                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:opacity-50"
+                    >
+                      <option value="">-- Subject --</option>
+                      {availableSubjects.map((s, i) => <option key={`sel-s-${s}-${i}`} value={s}>{s}</option>)}
+                    </select>
+                  </div>
+
+                  {/* Book Selector */}
+                  <div className="space-y-2">
+                    <label className="text-sm font-bold text-slate-500 uppercase flex items-center gap-2"><BookOpen className="w-4 h-4" /> Book</label>
+                    <select 
+                      value={selectedBook?.id || ''} 
+                      onChange={e => setSelectedBook(availableBooks.find(b => b.id === e.target.value) || null)}
+                      disabled={!selectedSubject}
+                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:opacity-50"
+                    >
+                      <option value="">-- Book --</option>
+                      {availableBooks.map((b, i) => <option key={`sel-b-${b.id}-${i}`} value={b.id}>{b.title}</option>)}
+                    </select>
+                  </div>
+
+                  {selectedBook && availableTopics.length === 0 && !isProcessing && (
+                    <div className="col-span-full mt-2 p-3 bg-amber-50 border border-amber-100 rounded-xl flex items-center gap-2 text-amber-700 text-sm">
+                      <AlertCircle className="w-4 h-4" />
+                      <span>This book hasn't been analyzed yet. Go to <strong>Books</strong> tab and click <strong>Analyze</strong> to extract topics.</span>
+                    </div>
                   )}
                 </div>
-                <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-xl">
-                  <button 
-                    onClick={() => setTargetLanguage('English')} 
-                    className={cn("px-4 py-1.5 rounded-lg text-sm font-bold transition-all", targetLanguage === 'English' ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500")}
-                  >
-                    English
-                  </button>
-                  <button 
-                    onClick={() => setTargetLanguage('Nepali')} 
-                    className={cn("px-4 py-1.5 rounded-lg text-sm font-bold transition-all", targetLanguage === 'Nepali' ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500")}
-                  >
-                    Nepali
-                  </button>
-                </div>
-              </div>
-              
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-                {/* Grade Selector */}
-                <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-500 uppercase flex items-center gap-2"><GraduationCap className="w-4 h-4" /> Grade</label>
-                  <select 
-                    value={selectedGrade} 
-                    onChange={e => setSelectedGrade(e.target.value)}
-                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                  >
-                    <option value="">-- Grade --</option>
-                    {availableGrades.map((g, i) => <option key={`sel-g-${g}-${i}`} value={g}>{g}</option>)}
-                  </select>
-                </div>
 
-                {/* Subject Selector */}
-                <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-500 uppercase flex items-center gap-2"><BookIcon className="w-4 h-4" /> Subject</label>
-                  <select 
-                    value={selectedSubject} 
-                    onChange={e => setSelectedSubject(e.target.value)}
-                    disabled={!selectedGrade}
-                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:opacity-50"
-                  >
-                    <option value="">-- Subject --</option>
-                    {availableSubjects.map((s, i) => <option key={`sel-s-${s}-${i}`} value={s}>{s}</option>)}
-                  </select>
-                </div>
-
-                {/* Book Selector */}
-                <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-500 uppercase flex items-center gap-2"><BookOpen className="w-4 h-4" /> Book</label>
-                  <select 
-                    value={selectedBook?.id || ''} 
-                    onChange={e => setSelectedBook(availableBooks.find(b => b.id === e.target.value) || null)}
-                    disabled={!selectedSubject}
-                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:opacity-50"
-                  >
-                    <option value="">-- Book --</option>
-                    {availableBooks.map((b, i) => <option key={`sel-b-${b.id}-${i}`} value={b.id}>{b.title}</option>)}
-                  </select>
-                </div>
-
-                {selectedBook && availableTopics.length === 0 && !isProcessing && (
-                  <div className="col-span-full mt-2 p-3 bg-amber-50 border border-amber-100 rounded-xl flex items-center gap-2 text-amber-700 text-sm">
-                    <AlertCircle className="w-4 h-4" />
-                    <span>This book hasn't been analyzed yet. Go to <strong>Books</strong> tab and click <strong>Analyze</strong> to extract topics.</span>
-                  </div>
-                )}
-              </div>
-
-              {/* Topic List & Bulk Generation */}
-              {selectedBook && availableTopics.length > 0 && (
-                <div className="mt-8 pt-8 border-t border-slate-100 space-y-8">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                    <div className="flex items-center gap-4">
-                      <h3 className="text-xl font-bold flex items-center gap-2"><List className="text-indigo-600 w-5 h-5" /> Topics & Lessons</h3>
-                      <div className="text-sm text-slate-500">
-                        <span className="font-bold text-slate-700">{generatedTopicIds.size}</span> / {availableTopics.length} Generated
+                {/* Topic List & Bulk Generation */}
+                {selectedBook && availableTopics.length > 0 && (
+                  <div className="mt-8 pt-8 border-t border-slate-100 space-y-8">
+                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                      <div className="flex items-center gap-4">
+                        <h3 className="text-xl font-bold flex items-center gap-2"><List className="text-indigo-600 w-5 h-5" /> Topics & Lessons</h3>
+                        <div className="text-sm text-slate-500">
+                          <span className="font-bold text-slate-700">{generatedTopicIds.size}</span> / {availableTopics.length} Generated
+                        </div>
                       </div>
-                    </div>
 
-                    <div className="flex items-center gap-4 w-full sm:w-auto">
-                      <div className="relative flex-1 sm:w-64">
-                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                        <input 
-                          type="text"
-                          placeholder="Search topics..."
-                          value={topicSearchTerm}
-                          onChange={e => setTopicSearchTerm(e.target.value)}
-                          className="w-full pl-10 pr-10 py-2 bg-white border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                        />
-                        {topicSearchTerm && (
+                      <div className="flex flex-col sm:flex-row items-center gap-4 w-full lg:w-auto">
+                        <div className="relative w-full sm:w-64">
+                          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                          <input 
+                            type="text"
+                            placeholder="Search topics..."
+                            value={topicSearchTerm}
+                            onChange={e => setTopicSearchTerm(e.target.value)}
+                            className="w-full pl-10 pr-10 py-2 bg-white border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                          />
+                          {topicSearchTerm && (
+                            <button 
+                              onClick={() => setTopicSearchTerm('')}
+                              className="absolute right-3 top-1/2 -translate-y-1/2 p-1 hover:bg-slate-100 rounded-full text-slate-400"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
+
+                        {isBulkGenerating ? (
+                          <div className="w-full sm:w-64">
+                            <div className="flex justify-between text-xs font-bold text-indigo-600 mb-1 uppercase tracking-wider">
+                              <span>Bulk Generating...</span>
+                              <span>{Math.round((bulkProgress / bulkTotal) * 100)}%</span>
+                            </div>
+                            <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                              <motion.div 
+                                className="h-full bg-indigo-600"
+                                initial={{ width: 0 }}
+                                animate={{ width: `${(bulkProgress / bulkTotal) * 100}%` }}
+                              />
+                            </div>
+                            <p className="text-[10px] text-slate-400 mt-1 text-center">
+                              Processing {bulkProgress} of {bulkTotal} topics
+                            </p>
+                          </div>
+                        ) : (
                           <button 
-                            onClick={() => setTopicSearchTerm('')}
-                            className="absolute right-3 top-1/2 -translate-y-1/2 p-1 hover:bg-slate-100 rounded-full text-slate-400"
+                            onClick={handleBulkGenerate}
+                            disabled={isGenerating}
+                            className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-2 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 disabled:opacity-50 text-sm"
                           >
-                            <X className="w-3 h-3" />
+                            <Sparkles className="w-4 h-4" />
+                            Generate All Plans
                           </button>
                         )}
                       </div>
-
-                      {isBulkGenerating ? (
-                        <div className="flex-1 sm:w-64">
-                          <div className="flex justify-between text-xs font-bold text-indigo-600 mb-1 uppercase tracking-wider">
-                            <span>Bulk Generating...</span>
-                            <span>{Math.round((bulkProgress / bulkTotal) * 100)}%</span>
-                          </div>
-                          <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                            <motion.div 
-                              className="h-full bg-indigo-600"
-                              initial={{ width: 0 }}
-                              animate={{ width: `${(bulkProgress / bulkTotal) * 100}%` }}
-                            />
-                          </div>
-                          <p className="text-[10px] text-slate-400 mt-1 text-center">
-                            Processing {bulkProgress} of {bulkTotal} topics
-                          </p>
-                        </div>
-                      ) : (
-                        <button 
-                          onClick={handleBulkGenerate}
-                          disabled={isGenerating}
-                          className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-2 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 disabled:opacity-50 text-sm"
-                        >
-                          <Sparkles className="w-4 h-4" />
-                          Generate All Plans
-                        </button>
-                      )}
                     </div>
-                  </div>
-                  
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
-                    {availableTopics
-                      .filter(t => !topicSearchTerm || t.topic.toLowerCase().includes(topicSearchTerm.toLowerCase()) || t.unit.toLowerCase().includes(topicSearchTerm.toLowerCase()))
-                      .map((topic) => {
-                        const isGenerated = generatedTopicIds.has(topic.id!);
-                        const isSelected = selectedTopic?.id === topic.id;
-                        
-                        return (
-                          <div 
-                            key={topic.id} 
-                            className={cn(
-                              "p-4 rounded-xl border transition-all flex items-center justify-between gap-4",
-                              isSelected ? "border-indigo-200 bg-indigo-50/30 ring-1 ring-indigo-200" : "border-slate-100 bg-slate-50/50 hover:bg-slate-50"
-                            )}
-                          >
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2 mb-1">
-                                {isGenerated && <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />}
-                                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider truncate">{topic.unit}</span>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
+                      {availableTopics
+                        .filter(t => !topicSearchTerm || t.topic.toLowerCase().includes(topicSearchTerm.toLowerCase()) || t.unit.toLowerCase().includes(topicSearchTerm.toLowerCase()))
+                        .map((topic) => {
+                          const isGenerated = generatedTopicIds.has(topic.id!);
+                          const isSelected = selectedTopic?.id === topic.id;
+                          
+                          return (
+                            <div 
+                              key={topic.id} 
+                              className={cn(
+                                "p-4 rounded-xl border transition-all flex items-center justify-between gap-4",
+                                isSelected ? "border-indigo-200 bg-indigo-50/30 ring-1 ring-indigo-200" : "border-slate-100 bg-slate-50/50 hover:bg-slate-50"
+                              )}
+                            >
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 mb-1">
+                                  {isGenerated && <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />}
+                                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider truncate">{topic.unit}</span>
+                                </div>
+                                <h4 className="font-bold text-slate-800 truncate text-sm" title={topic.topic}>{topic.topic}</h4>
                               </div>
-                              <h4 className="font-bold text-slate-800 truncate text-sm" title={topic.topic}>{topic.topic}</h4>
-                            </div>
-                            
-                            <div className="flex items-center gap-2">
-                              {isGenerated ? (
-                                <>
+                              
+                              <div className="flex items-center gap-2">
+                                {isGenerated ? (
+                                  <>
+                                    <button 
+                                      onClick={() => {
+                                        setSelectedTopic(topic);
+                                        handleAutoGenerate(topic);
+                                      }}
+                                      className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-white rounded-lg transition-all"
+                                      title="View/Load Plan"
+                                    >
+                                      <Eye className="w-4 h-4" />
+                                    </button>
+                                    <button 
+                                      onClick={() => {
+                                        setSelectedTopic(topic);
+                                        handleAutoGenerate(topic, true);
+                                      }}
+                                      disabled={isGenerating}
+                                      className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-white rounded-lg transition-all disabled:opacity-50"
+                                      title="Regenerate Plan"
+                                    >
+                                      <RefreshCw className={cn("w-4 h-4", (isGenerating && isSelected) && "animate-spin")} />
+                                    </button>
+                                  </>
+                                ) : (
                                   <button 
                                     onClick={() => {
                                       setSelectedTopic(topic);
                                       handleAutoGenerate(topic);
                                     }}
-                                    className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-white rounded-lg transition-all"
-                                    title="View/Load Plan"
-                                  >
-                                    <Eye className="w-4 h-4" />
-                                  </button>
-                                  <button 
-                                    onClick={() => {
-                                      setSelectedTopic(topic);
-                                      handleAutoGenerate(topic, true);
-                                    }}
                                     disabled={isGenerating}
-                                    className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-white rounded-lg transition-all disabled:opacity-50"
-                                    title="Regenerate Plan"
+                                    className="px-3 py-1.5 bg-indigo-600 text-white text-xs font-bold rounded-lg hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center gap-1"
                                   >
-                                    <RefreshCw className={cn("w-4 h-4", (isGenerating && isSelected) && "animate-spin")} />
+                                    <Sparkles className="w-3 h-3" /> Generate
                                   </button>
-                                </>
-                              ) : (
-                                <button 
-                                  onClick={() => {
-                                    setSelectedTopic(topic);
-                                    handleAutoGenerate(topic);
-                                  }}
-                                  disabled={isGenerating}
-                                  className="px-3 py-1.5 bg-indigo-600 text-white text-xs font-bold rounded-lg hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center gap-1"
-                                >
-                                  <Sparkles className="w-3 h-3" /> Generate
-                                </button>
-                              )}
+                                )}
+                              </div>
                             </div>
-                          </div>
-                        );
-                      })}
-                  </div>
-                  
-                  {availableTopics.filter(t => !topicSearchTerm || t.topic.toLowerCase().includes(topicSearchTerm.toLowerCase()) || t.unit.toLowerCase().includes(topicSearchTerm.toLowerCase())).length === 0 && (
-                    <div className="text-center py-10 bg-slate-50 rounded-2xl border border-slate-100 border-dashed">
-                      <Search className="w-10 h-10 text-slate-200 mx-auto mb-3" />
-                      <p className="text-slate-400 text-sm">No topics match your search.</p>
+                          );
+                        })}
                     </div>
-                  )}
-                </div>
-              )}
-            </div>
+                    
+                    {availableTopics.filter(t => !topicSearchTerm || t.topic.toLowerCase().includes(topicSearchTerm.toLowerCase()) || t.unit.toLowerCase().includes(topicSearchTerm.toLowerCase())).length === 0 && (
+                      <div className="text-center py-10 bg-slate-50 rounded-2xl border border-slate-100 border-dashed">
+                        <Search className="w-10 h-10 text-slate-200 mx-auto mb-3" />
+                        <p className="text-slate-400 text-sm">No topics match your search.</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
 
-            {/* Generated Plan Display */}
-            <AnimatePresence mode="wait">
-              {isGenerating ? (
-                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex flex-col items-center justify-center py-20 bg-white rounded-2xl border border-slate-200 border-dashed">
-                  <Loader2 className="w-12 h-12 text-indigo-600 animate-spin mb-4" />
-                  <p className="text-slate-500 font-medium">
-                    {selectedBook?.file_path ? "Studying PDF document and generating lesson plan..." : "Generating your lesson plan from database content..."}
-                  </p>
-                </motion.div>
-              ) : currentPlan ? (
-                <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-lg">
-                  <div className="bg-indigo-600 px-8 py-6 flex items-center justify-between text-white">
-                    <div>
-                      <h3 className="text-2xl font-bold">{currentPlan.lesson_topic || (currentPlan as any).topic}</h3>
-                      <p className="opacity-80">{currentPlan.subject} • Grade {currentPlan.class}</p>
-                    </div>
-                    <div className="flex gap-3">
-                      <button 
-                        onClick={() => selectedTopic && handleAutoGenerate(selectedTopic, true)} 
-                        className="bg-white/10 hover:bg-white/20 p-2 rounded-lg transition-all flex items-center gap-2 text-sm font-medium" 
-                        title="Study PDF and Regenerate"
-                      >
-                        <RefreshCw className="w-4 h-4" /> Regenerate
-                      </button>
-                      <button onClick={savePlan} className="bg-white/10 hover:bg-white/20 p-2 rounded-lg transition-all" title="Save to History"><Save className="w-5 h-5" /></button>
-                      <button onClick={() => printPlan(currentPlan)} className="bg-white/10 hover:bg-white/20 p-2 rounded-lg transition-all" title="Print Plan"><Printer className="w-5 h-5" /></button>
-                      <button onClick={() => copyPlanToClipboard(currentPlan)} className="bg-white/10 hover:bg-white/20 p-2 rounded-lg transition-all" title="Copy Content"><Copy className="w-5 h-5" /></button>
-                    </div>
-                  </div>
-                  
-                  <div className="p-8 grid grid-cols-1 md:grid-cols-2 gap-10">
-                    <div className="space-y-8">
+              {/* Generated Plan Display */}
+              <AnimatePresence mode="wait">
+                {isGenerating ? (
+                  <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex flex-col items-center justify-center py-20 bg-white rounded-2xl border border-slate-200 border-dashed">
+                    <Loader2 className="w-12 h-12 text-indigo-600 animate-spin mb-4" />
+                    <p className="text-slate-500 font-medium">
+                      {selectedBook?.file_path ? "Studying PDF document and generating lesson plan..." : "Generating your lesson plan from database content..."}
+                    </p>
+                  </motion.div>
+                ) : currentPlan ? (
+                  <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-lg">
+                    <div className="bg-indigo-600 px-8 py-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-white">
                       <div>
-                        <h5 className="text-xs font-bold text-indigo-600 uppercase tracking-widest mb-3">1. Objectives / Learning Outcomes</h5>
-                        <p className="text-slate-700 leading-relaxed bg-slate-50 p-4 rounded-xl border border-slate-100">
-                          {currentPlan.learning_outcomes || currentPlan.objectives}
-                        </p>
+                        <h3 className="text-2xl font-bold">{currentPlan.lesson_topic || (currentPlan as any).topic}</h3>
+                        <p className="opacity-80">{currentPlan.subject} • Grade {currentPlan.class}</p>
                       </div>
-                      <div>
-                        <h5 className="text-xs font-bold text-indigo-600 uppercase tracking-widest mb-3">2. Warm up & Review</h5>
-                        <p className="text-slate-700 leading-relaxed bg-slate-50 p-4 rounded-xl border border-slate-100">{currentPlan.warm_up_review}</p>
-                      </div>
-                      <div>
-                        <h5 className="text-xs font-bold text-indigo-600 uppercase tracking-widest mb-3">3. Teaching & Learning Activities</h5>
-                        <ul className="space-y-3">
-                          {(currentPlan.teaching_activities || currentPlan.learning_activities || []).map((act, i) => (
-                            <li key={i} className="flex gap-4 text-slate-700 p-3 bg-white border border-slate-100 rounded-lg shadow-sm">
-                              <span className="text-indigo-600 font-bold">{String.fromCharCode(97 + i)}.</span>{act}
-                            </li>
-                          ))}
-                        </ul>
+                      <div className="flex flex-wrap gap-3">
+                        <button 
+                          onClick={() => selectedTopic && handleAutoGenerate(selectedTopic, true)} 
+                          className="bg-white/10 hover:bg-white/20 p-2 rounded-lg transition-all flex items-center gap-2 text-sm font-medium" 
+                          title="Study PDF and Regenerate"
+                        >
+                          <RefreshCw className="w-4 h-4" /> Regenerate
+                        </button>
+                        <button onClick={savePlan} className="bg-white/10 hover:bg-white/20 p-2 rounded-lg transition-all" title="Save to History"><Save className="w-5 h-5" /></button>
+                        <button onClick={() => printPlan(currentPlan)} className="bg-white/10 hover:bg-white/20 p-2 rounded-lg transition-all" title="Print Plan"><Printer className="w-5 h-5" /></button>
+                        <button onClick={() => copyPlanToClipboard(currentPlan)} className="bg-white/10 hover:bg-white/20 p-2 rounded-lg transition-all" title="Copy Content"><Copy className="w-5 h-5" /></button>
                       </div>
                     </div>
-                    <div className="space-y-8">
-                      <div>
-                        <h5 className="text-xs font-bold text-indigo-600 uppercase tracking-widest mb-3">4. Evaluation</h5>
-                        <ul className="space-y-3">
-                          {(currentPlan.evaluation || currentPlan.evaluation_activities || []).map((ev, i) => (
-                            <li key={i} className="flex gap-4 text-slate-700 p-3 bg-white border border-slate-100 rounded-lg shadow-sm">
-                              <span className="text-indigo-600 font-bold">{String.fromCharCode(97 + i)}.</span>{ev}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                      <div>
-                        <h5 className="text-xs font-bold text-indigo-600 uppercase tracking-widest mb-3">5. Assignments</h5>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                          <div className="bg-slate-50 p-5 rounded-2xl border border-slate-100">
-                            <h6 className="font-bold text-slate-800 text-sm mb-3 border-b border-slate-200 pb-2">Class Work</h6>
-                            <div className="text-sm text-slate-600 space-y-1">
-                              {Array.isArray(currentPlan.class_work) ? (
-                                currentPlan.class_work.map((item, i) => <p key={i}>• {item}</p>)
-                              ) : (
-                                <p>{currentPlan.class_work}</p>
-                              )}
-                            </div>
-                          </div>
-                          <div className="bg-slate-50 p-5 rounded-2xl border border-slate-100">
-                            <h6 className="font-bold text-slate-800 text-sm mb-3 border-b border-slate-200 pb-2">Home Assignment</h6>
-                            <div className="text-sm text-slate-600 space-y-1">
-                              {Array.isArray(currentPlan.home_assignment) ? (
-                                currentPlan.home_assignment.map((item, i) => <p key={i}>• {item}</p>)
-                              ) : (
-                                <p>{currentPlan.home_assignment}</p>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                      {(currentPlan.principal_remarks || currentPlan.remarks) && (
+                    
+                    <div className="p-8 grid grid-cols-1 md:grid-cols-2 gap-10">
+                      <div className="space-y-8">
                         <div>
-                          <h5 className="text-xs font-bold text-indigo-600 uppercase tracking-widest mb-3">Remarks</h5>
-                          <p className="text-slate-600 italic text-sm bg-slate-50 p-4 rounded-xl border border-slate-100">
-                            {currentPlan.principal_remarks || currentPlan.remarks}
+                          <h5 className="text-xs font-bold text-indigo-600 uppercase tracking-widest mb-3">1. Objectives / Learning Outcomes</h5>
+                          <p className="text-slate-700 leading-relaxed bg-slate-50 p-4 rounded-xl border border-slate-100">
+                            {currentPlan.learning_outcomes || currentPlan.objectives}
                           </p>
                         </div>
+                        <div>
+                          <h5 className="text-xs font-bold text-indigo-600 uppercase tracking-widest mb-3">2. Warm up & Review</h5>
+                          <p className="text-slate-700 leading-relaxed bg-slate-50 p-4 rounded-xl border border-slate-100">{currentPlan.warm_up_review}</p>
+                        </div>
+                        <div>
+                          <h5 className="text-xs font-bold text-indigo-600 uppercase tracking-widest mb-3">3. Teaching & Learning Activities</h5>
+                          <ul className="space-y-3">
+                            {(currentPlan.teaching_activities || currentPlan.learning_activities || []).map((act, i) => (
+                              <li key={i} className="flex gap-4 text-slate-700 p-3 bg-white border border-slate-100 rounded-lg shadow-sm">
+                                <span className="text-indigo-600 font-bold">{String.fromCharCode(97 + i)}.</span>{act}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      </div>
+                      <div className="space-y-8">
+                        <div>
+                          <h5 className="text-xs font-bold text-indigo-600 uppercase tracking-widest mb-3">4. Evaluation</h5>
+                          <ul className="space-y-3">
+                            {(currentPlan.evaluation || currentPlan.evaluation_activities || []).map((ev, i) => (
+                              <li key={i} className="flex gap-4 text-slate-700 p-3 bg-white border border-slate-100 rounded-lg shadow-sm">
+                                <span className="text-indigo-600 font-bold">{String.fromCharCode(97 + i)}.</span>{ev}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                        <div>
+                          <h5 className="text-xs font-bold text-indigo-600 uppercase tracking-widest mb-3">5. Assignments</h5>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div className="bg-slate-50 p-5 rounded-2xl border border-slate-100">
+                              <h6 className="font-bold text-slate-800 text-sm mb-3 border-b border-slate-200 pb-2">Class Work</h6>
+                              <div className="text-sm text-slate-600 space-y-1">
+                                {Array.isArray(currentPlan.class_work) ? (
+                                  currentPlan.class_work.map((item, i) => <p key={i}>• {item}</p>)
+                                ) : (
+                                  <p>{currentPlan.class_work}</p>
+                                )}
+                              </div>
+                            </div>
+                            <div className="bg-slate-50 p-5 rounded-2xl border border-slate-100">
+                              <h6 className="font-bold text-slate-800 text-sm mb-3 border-b border-slate-200 pb-2">Home Assignment</h6>
+                              <div className="text-sm text-slate-600 space-y-1">
+                                {Array.isArray(currentPlan.home_assignment) ? (
+                                  currentPlan.home_assignment.map((item, i) => <p key={i}>• {item}</p>)
+                                ) : (
+                                  <p>{currentPlan.home_assignment}</p>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                        {(currentPlan.principal_remarks || currentPlan.remarks) && (
+                          <div>
+                            <h5 className="text-xs font-bold text-indigo-600 uppercase tracking-widest mb-3">Remarks</h5>
+                            <p className="text-slate-600 italic text-sm bg-slate-50 p-4 rounded-xl border border-slate-100">
+                              {currentPlan.principal_remarks || currentPlan.remarks}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </motion.div>
+                ) : (
+                  <div className="text-center py-20 bg-white rounded-2xl border border-slate-200 border-dashed">
+                    <Sparkles className="w-12 h-12 text-slate-200 mx-auto mb-4" />
+                    <p className="text-slate-400">Select a Grade, Subject, and Topic to auto-generate a lesson plan.</p>
+                  </div>
+                )}
+              </AnimatePresence>
+            </section>
+          } />
+
+          <Route path="/lesson-plans" element={
+            <div className="space-y-6">
+              <div className="bg-white rounded-2xl border border-slate-200 p-8 shadow-sm">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
+                  <h3 className="text-2xl font-bold text-slate-800">Saved Lesson Plans</h3>
+                  
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div className="relative flex-1 min-w-[250px]">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                      <input 
+                        type="text"
+                        placeholder="Search lessons, topics, subjects..."
+                        value={searchTerm}
+                        onChange={e => setSearchTerm(e.target.value)}
+                        className="w-full pl-10 pr-10 py-2 bg-white border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                      />
+                      {searchTerm && (
+                        <button 
+                          onClick={() => setSearchTerm('')}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 p-1 hover:bg-slate-100 rounded-full text-slate-400"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
                       )}
                     </div>
-                  </div>
-                </motion.div>
-              ) : (
-                <div className="text-center py-20 bg-white rounded-2xl border border-slate-200 border-dashed">
-                  <Sparkles className="w-12 h-12 text-slate-200 mx-auto mb-4" />
-                  <p className="text-slate-400">Select a Grade, Subject, and Topic to auto-generate a lesson plan.</p>
-                </div>
-              )}
-            </AnimatePresence>
-          </section>
-        )}
 
-        {activeTab === 'lesson-plans' && (
-          <div className="space-y-6">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-              <h3 className="text-2xl font-bold text-slate-800">Saved Lesson Plans</h3>
-              
-              <div className="flex flex-wrap items-center gap-3">
-                <div className="relative flex-1 min-w-[250px]">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                  <input 
-                    type="text"
-                    placeholder="Search lessons, topics, subjects..."
-                    value={searchTerm}
-                    onChange={e => setSearchTerm(e.target.value)}
-                    className="w-full pl-10 pr-10 py-2 bg-white border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                  />
-                  {searchTerm && (
-                    <button 
-                      onClick={() => setSearchTerm('')}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 p-1 hover:bg-slate-100 rounded-full text-slate-400"
+                    <select 
+                      value={filterGrade} 
+                      onChange={e => setFilterGrade(e.target.value)}
+                      className="px-4 py-2 bg-white border border-slate-200 rounded-xl text-sm font-medium focus:ring-2 focus:ring-indigo-500 outline-none"
                     >
-                      <X className="w-3 h-3" />
-                    </button>
+                      <option value="">All Grades</option>
+                      {Array.from(new Set(planHistory.map(p => p.class))).filter(Boolean).sort().map(g => (
+                        <option key={`filter-g-${g}`} value={g}>Grade {g}</option>
+                      ))}
+                    </select>
+                    
+                    <select 
+                      value={filterSubject} 
+                      onChange={e => setFilterSubject(e.target.value)}
+                      className="px-4 py-2 bg-white border border-slate-200 rounded-xl text-sm font-medium focus:ring-2 focus:ring-indigo-500 outline-none"
+                    >
+                      <option value="">All Subjects</option>
+                      {Array.from(new Set(planHistory.map(p => p.subject))).filter(Boolean).sort().map(s => (
+                        <option key={`filter-s-${s}`} value={s}>{s}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  {planHistory
+                    .filter(p => {
+                      const matchesGrade = !filterGrade || p.class === filterGrade;
+                      const matchesSubject = !filterSubject || p.subject === filterSubject;
+                      const searchLower = searchTerm.toLowerCase();
+                      const matchesSearch = !searchTerm || 
+                        (p.lesson_topic || '').toLowerCase().includes(searchLower) ||
+                        (p.subject || '').toLowerCase().includes(searchLower) ||
+                        (p.chapter || '').toLowerCase().includes(searchLower) ||
+                        (p.class || '').toLowerCase().includes(searchLower);
+                      
+                      return matchesGrade && matchesSubject && matchesSearch;
+                    })
+                    .map((plan, idx) => (
+                      <div key={`history-item-${plan.id}-${idx}`} className="bg-white rounded-xl border border-slate-200 p-6 flex items-center justify-between shadow-sm hover:shadow-md transition-all">
+                        <div>
+                          <h4 className="font-bold text-slate-800 text-lg">{plan.lesson_topic || (plan as any).topic}</h4>
+                          <p className="text-xs text-slate-500 uppercase font-semibold tracking-wider">{plan.subject} • Grade {plan.class} • {plan.chapter}</p>
+                        </div>
+                        <div className="flex gap-2">
+                          <button onClick={() => setViewingPlan(plan)} className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all" title="View Plan">
+                            <Eye className="w-5 h-5" />
+                          </button>
+                          <button onClick={() => printPlan(plan)} className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all" title="Print Plan">
+                            <Printer className="w-5 h-5" />
+                          </button>
+                          <button onClick={() => copyPlanToClipboard(plan)} className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all" title="Copy Content">
+                            <Copy className="w-5 h-5" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  
+                  {planHistory.length > 0 && planHistory.filter(p => {
+                    const matchesGrade = !filterGrade || p.class === filterGrade;
+                    const matchesSubject = !filterSubject || p.subject === filterSubject;
+                    const searchLower = searchTerm.toLowerCase();
+                    return matchesGrade && matchesSubject && (!searchTerm || 
+                      (p.lesson_topic || '').toLowerCase().includes(searchLower) ||
+                      (p.subject || '').toLowerCase().includes(searchLower) ||
+                      (p.chapter || '').toLowerCase().includes(searchLower) ||
+                      (p.class || '').toLowerCase().includes(searchLower));
+                  }).length === 0 && (
+                    <div className="text-center py-20 bg-white rounded-2xl border border-slate-200 border-dashed">
+                      <Search className="w-12 h-12 text-slate-200 mx-auto mb-4" />
+                      <p className="text-slate-400">No lesson plans match your search or filters.</p>
+                    </div>
+                  )}
+
+                  {planHistory.length === 0 && (
+                    <div className="text-center py-20 bg-white rounded-2xl border border-slate-200 border-dashed">
+                      <FileText className="w-12 h-12 text-slate-200 mx-auto mb-4" />
+                      <p className="text-slate-400">No lesson plans generated yet.</p>
+                    </div>
                   )}
                 </div>
-
-                <select 
-                  value={filterGrade} 
-                  onChange={e => setFilterGrade(e.target.value)}
-                  className="px-4 py-2 bg-white border border-slate-200 rounded-xl text-sm font-medium focus:ring-2 focus:ring-indigo-500 outline-none"
-                >
-                  <option value="">All Grades</option>
-                  {Array.from(new Set(planHistory.map(p => p.class))).filter(Boolean).sort().map(g => (
-                    <option key={`filter-g-${g}`} value={g}>Grade {g}</option>
-                  ))}
-                </select>
-                
-                <select 
-                  value={filterSubject} 
-                  onChange={e => setFilterSubject(e.target.value)}
-                  className="px-4 py-2 bg-white border border-slate-200 rounded-xl text-sm font-medium focus:ring-2 focus:ring-indigo-500 outline-none"
-                >
-                  <option value="">All Subjects</option>
-                  {Array.from(new Set(planHistory.map(p => p.subject))).filter(Boolean).sort().map(s => (
-                    <option key={`filter-s-${s}`} value={s}>{s}</option>
-                  ))}
-                </select>
               </div>
             </div>
-
-            <div className="space-y-4">
-              {planHistory
-                .filter(p => {
-                  const matchesGrade = !filterGrade || p.class === filterGrade;
-                  const matchesSubject = !filterSubject || p.subject === filterSubject;
-                  const searchLower = searchTerm.toLowerCase();
-                  const matchesSearch = !searchTerm || 
-                    (p.lesson_topic || '').toLowerCase().includes(searchLower) ||
-                    (p.subject || '').toLowerCase().includes(searchLower) ||
-                    (p.chapter || '').toLowerCase().includes(searchLower) ||
-                    (p.class || '').toLowerCase().includes(searchLower);
-                  
-                  return matchesGrade && matchesSubject && matchesSearch;
-                })
-                .map((plan, idx) => (
-                  <div key={`history-item-${plan.id}-${idx}`} className="bg-white rounded-xl border border-slate-200 p-6 flex items-center justify-between shadow-sm hover:shadow-md transition-all">
-                    <div>
-                      <h4 className="font-bold text-slate-800 text-lg">{plan.lesson_topic || (plan as any).topic}</h4>
-                      <p className="text-xs text-slate-500 uppercase font-semibold tracking-wider">{plan.subject} • Grade {plan.class} • {plan.chapter}</p>
-                    </div>
-                    <div className="flex gap-2">
-                      <button onClick={() => setViewingPlan(plan)} className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all" title="View Plan">
-                        <Eye className="w-5 h-5" />
-                      </button>
-                      <button onClick={() => printPlan(plan)} className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all" title="Print Plan">
-                        <Printer className="w-5 h-5" />
-                      </button>
-                      <button onClick={() => copyPlanToClipboard(plan)} className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all" title="Copy Content">
-                        <Copy className="w-5 h-5" />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              
-              {planHistory.length > 0 && planHistory.filter(p => {
-                const matchesGrade = !filterGrade || p.class === filterGrade;
-                const matchesSubject = !filterSubject || p.subject === filterSubject;
-                const searchLower = searchTerm.toLowerCase();
-                return matchesGrade && matchesSubject && (!searchTerm || 
-                  (p.lesson_topic || '').toLowerCase().includes(searchLower) ||
-                  (p.subject || '').toLowerCase().includes(searchLower) ||
-                  (p.chapter || '').toLowerCase().includes(searchLower) ||
-                  (p.class || '').toLowerCase().includes(searchLower));
-              }).length === 0 && (
-                <div className="text-center py-20 bg-white rounded-2xl border border-slate-200 border-dashed">
-                  <Search className="w-12 h-12 text-slate-200 mx-auto mb-4" />
-                  <p className="text-slate-400">No lesson plans match your search or filters.</p>
-                </div>
-              )}
-
-              {planHistory.length === 0 && (
-                <div className="text-center py-20 bg-white rounded-2xl border border-slate-200 border-dashed">
-                  <FileText className="w-12 h-12 text-slate-200 mx-auto mb-4" />
-                  <p className="text-slate-400">No lesson plans generated yet.</p>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
+          } />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
         {/* Plan Viewer Modal */}
         <AnimatePresence>
           {viewingPlan && (
