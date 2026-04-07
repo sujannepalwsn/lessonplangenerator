@@ -29,12 +29,15 @@ export function AutonomousDashboard() {
   const [logs, setLogs] = useState<AgentLog[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isBackendConnected, setIsBackendConnected] = useState<boolean | null>(null);
 
   const fetchStatus = async () => {
     try {
       const response = await fetch(`${BACKEND_URL}/api/autonomous/status`);
+      if (!response.ok) throw new Error(`Backend error: ${response.statusText}`);
       const data = await response.json();
 
+      setIsBackendConnected(true);
       if (data.status) {
         setStatus(data.status);
         setIteration(data.iteration);
@@ -42,6 +45,7 @@ export function AutonomousDashboard() {
       }
     } catch (err) {
       console.error('Failed to fetch autonomous status:', err);
+      setIsBackendConnected(false);
     }
   };
 
@@ -56,14 +60,26 @@ export function AutonomousDashboard() {
     setIsLoading(true);
     setError(null);
     try {
+      // 1. Validate URL format first
+      new URL(startUrl);
+
+      // 2. Check backend health
+      const healthCheck = await fetch(`${BACKEND_URL}/health`).catch(() => null);
+      if (!healthCheck || !healthCheck.ok) {
+        throw new Error(`Cannot connect to Backend Agent at ${BACKEND_URL}. Please ensure the server is running on port 3001.`);
+      }
+
       const response = await fetch(`${BACKEND_URL}/api/autonomous/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: startUrl })
       });
 
-      if (!response.ok) throw new Error('Failed to start ingestion');
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Failed to start ingestion');
+
       setStatus('running');
+      setError(null);
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -83,8 +99,19 @@ export function AutonomousDashboard() {
           <div className="bg-indigo-600 p-2 rounded-xl">
             <Layers className="text-white w-6 h-6" />
           </div>
-          <div>
-            <h2 className="text-2xl font-bold text-slate-800">Autonomous Ingestion</h2>
+          <div className="flex-1">
+            <div className="flex items-center gap-3">
+              <h2 className="text-2xl font-bold text-slate-800">Autonomous Ingestion</h2>
+              {isBackendConnected !== null && (
+                <div className={cn(
+                  "px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-widest flex items-center gap-1",
+                  isBackendConnected ? "bg-emerald-100 text-emerald-600" : "bg-red-100 text-red-600"
+                )}>
+                  <div className={cn("w-1.5 h-1.5 rounded-full", isBackendConnected ? "bg-emerald-500" : "bg-red-500")}></div>
+                  {isBackendConnected ? "Agent Online" : "Agent Offline"}
+                </div>
+              )}
+            </div>
             <p className="text-slate-500 text-sm">Discover, Extract & Upload PDF books automatically.</p>
           </div>
         </div>

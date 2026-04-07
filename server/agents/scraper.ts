@@ -15,8 +15,36 @@ export async function scrapePDFLinksWithGemini(targetUrl: string, apiKey: string
 
   try {
     const browser = await chromium.launch({ headless: true });
-    const page = await browser.newPage();
-    await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    const context = await browser.newContext({
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      viewport: { width: 1280, height: 720 }
+    });
+    const page = await context.newPage();
+
+    // Add extra headers to avoid bot detection
+    await page.setExtraHTTPHeaders({
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8'
+    });
+
+    // Retry logic for navigation
+    let attempts = 0;
+    const maxAttempts = 3;
+    while (attempts < maxAttempts) {
+      try {
+        console.log(`Navigating to ${targetUrl} (Attempt ${attempts + 1}/${maxAttempts})...`);
+        await page.goto(targetUrl, {
+          waitUntil: 'networkidle', // Wait for full load to bypass some bot checks
+          timeout: 45000
+        });
+        break;
+      } catch (e) {
+        attempts++;
+        if (attempts === maxAttempts) throw e;
+        await page.waitForTimeout(2000 * attempts);
+      }
+    }
+
     const html = await page.content();
     await browser.close();
 
@@ -36,11 +64,14 @@ export async function scrapePDFLinksWithGemini(targetUrl: string, apiKey: string
 
 export async function scrapePDFLinks(targetUrl: string): Promise<PDFLink[]> {
   const browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage();
+  const context = await browser.newContext({
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+  });
+  const page = await context.newPage();
 
   try {
-    console.log(`Navigating to ${targetUrl}...`);
-    await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    console.log(`Navigating to ${targetUrl} (Playwright Fallback)...`);
+    await page.goto(targetUrl, { waitUntil: 'networkidle', timeout: 45000 });
 
     // Intelligent Wait for some dynamic content
     await page.waitForTimeout(2000);
