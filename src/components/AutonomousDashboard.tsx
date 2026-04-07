@@ -81,7 +81,11 @@ export function AutonomousDashboard() {
       setStatus('running');
       setError(null);
     } catch (err: any) {
-      setError(err.message);
+      if (err.message.includes('connect')) {
+        setError(<>Agent server is not responding. Start it with <code className="bg-red-100 px-1 rounded">npm run server</code> in your terminal.</>);
+      } else {
+        setError(err.message);
+      }
     } finally {
       setIsLoading(false);
     }
