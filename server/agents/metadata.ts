@@ -23,14 +23,15 @@ export async function downloadPDF(url: string): Promise<Buffer> {
 /**
  * Extract metadata using a local LLM via Ollama API
  */
-export async function extractMetadataWithOllama(pdfBuffer: Buffer, filename: string): Promise<BookMetadata> {
+export async function extractMetadataWithOllama(pdfBuffer: Buffer, filename: string, customUrl?: string): Promise<BookMetadata> {
   try {
     // Read only the first 1MB for metadata to be efficient
     const metadataBuffer = pdfBuffer.slice(0, 1024 * 1024);
     const data = await pdf(metadataBuffer);
     const textSnippet = data.text.slice(0, 2000); // Send first 2000 characters to the LLM
 
-    console.log(`Asking Ollama for metadata on: ${filename}`);
+    const activeUrl = customUrl || OLLAMA_URL;
+    console.log(`Asking Ollama (${activeUrl}) for metadata on: ${filename}`);
 
     const prompt = `
       Identify the Grade/Class, Subject, and a clean Title for this textbook based on its contents and filename.
@@ -47,7 +48,7 @@ export async function extractMetadataWithOllama(pdfBuffer: Buffer, filename: str
       If you can't identify one, use "General" for grade and "Unknown" for subject.
     `;
 
-    const response = await axios.post(`${OLLAMA_URL}/api/generate`, {
+    const response = await axios.post(`${activeUrl}/api/generate`, {
       model: OLLAMA_MODEL,
       prompt: prompt,
       stream: false,

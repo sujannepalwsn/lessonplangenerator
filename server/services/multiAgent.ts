@@ -20,24 +20,26 @@ export async function callAgent(
   agentType: AgentType,
   prompt: string,
   systemInstruction?: string,
-  jsonMode: boolean = false
+  jsonMode: boolean = false,
+  userKeys: any = {}
 ): Promise<string> {
   switch (agentType) {
     case 'gemini':
-      return callGemini(prompt, systemInstruction, jsonMode);
+      return callGemini(prompt, systemInstruction, jsonMode, userKeys.gemini);
     case 'groq':
-      return callGroq(prompt, systemInstruction, jsonMode);
+      return callGroq(prompt, systemInstruction, jsonMode, userKeys.groq);
     case 'huggingface':
-      return callHuggingFace(prompt, systemInstruction);
+      return callHuggingFace(prompt, systemInstruction, userKeys.huggingface);
     case 'ollama':
-      return callOllama(prompt, systemInstruction, jsonMode);
+      return callOllama(prompt, systemInstruction, jsonMode, userKeys.ollama_url);
     default:
-      return callGemini(prompt, systemInstruction, jsonMode);
+      return callGemini(prompt, systemInstruction, jsonMode, userKeys.gemini);
   }
 }
 
-async function callGemini(prompt: string, system?: string, jsonMode?: boolean): Promise<string> {
-  const model = genAI.getGenerativeModel({
+async function callGemini(prompt: string, system?: string, jsonMode?: boolean, customKey?: string): Promise<string> {
+  const activeAI = customKey ? new GoogleGenAI(customKey) : genAI;
+  const model = activeAI.getGenerativeModel({
     model: "gemini-1.5-flash",
     systemInstruction: system
   });
@@ -52,14 +54,15 @@ async function callGemini(prompt: string, system?: string, jsonMode?: boolean): 
   return text;
 }
 
-async function callGroq(prompt: string, system?: string, jsonMode?: boolean): Promise<string> {
-  if (!groq) throw new Error("Groq API key not configured");
+async function callGroq(prompt: string, system?: string, jsonMode?: boolean, customKey?: string): Promise<string> {
+  const activeGroq = customKey ? new Groq({ apiKey: customKey }) : groq;
+  if (!activeGroq) throw new Error("Groq API key not configured");
 
   const messages: any[] = [];
   if (system) messages.push({ role: "system", content: system });
   messages.push({ role: "user", content: prompt });
 
-  const completion = await groq.chat.completions.create({
+  const completion = await activeGroq.chat.completions.create({
     messages,
     model: "llama-3.3-70b-versatile",
     response_format: jsonMode ? { type: "json_object" } : undefined,
@@ -68,20 +71,21 @@ async function callGroq(prompt: string, system?: string, jsonMode?: boolean): Pr
   return completion.choices[0]?.message?.content || "";
 }
 
-async function callHuggingFace(prompt: string, system?: string): Promise<string> {
+async function callHuggingFace(prompt: string, system?: string, customKey?: string): Promise<string> {
   const fullPrompt = system ? `${system}\n\nUser: ${prompt}` : prompt;
+  const activeToken = customKey || huggingFaceToken;
 
   const response = await axios.post(
     "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2",
     { inputs: fullPrompt },
-    { headers: { Authorization: `Bearer ${huggingFaceToken}` } }
+    { headers: { Authorization: `Bearer ${activeToken}` } }
   );
 
   return response.data[0]?.generated_text || "";
 }
 
-async function callOllama(prompt: string, system?: string, jsonMode?: boolean): Promise<string> {
-  const ollamaUrl = process.env.OLLAMA_URL || 'http://localhost:11434';
+async function callOllama(prompt: string, system?: string, jsonMode?: boolean, customUrl?: string): Promise<string> {
+  const ollamaUrl = customUrl || process.env.OLLAMA_URL || 'http://localhost:11434';
   const fullPrompt = system ? `${system}\n\n${prompt}` : prompt;
 
   const response = await axios.post(`${ollamaUrl}/api/generate`, {

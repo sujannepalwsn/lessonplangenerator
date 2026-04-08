@@ -19,9 +19,15 @@ async function callAgentAPI(params: {
 }): Promise<any> {
   const agent = params.agent || 'gemini';
 
-  // If it's gemini and we don't have a backend or want direct call
+  // Get keys from localStorage
+  const savedKeysRaw = localStorage.getItem('ai_api_keys');
+  const userKeys = savedKeysRaw ? JSON.parse(savedKeysRaw) : {};
+
+  // If it's gemini and we have a user key, or it's standard call without PDF
   if (agent === 'gemini' && !params.pdfBase64) {
-    const model = ai.getGenerativeModel({
+    const geminiKey = userKeys.gemini || apiKey;
+    const userAI = new GoogleGenAI(geminiKey);
+    const model = userAI.getGenerativeModel({
       model: "gemini-1.5-flash",
       systemInstruction: params.system
     });
@@ -29,11 +35,22 @@ async function callAgentAPI(params: {
     return result.response;
   }
 
+  // Inject user keys into params for backend proxy
+  const paramsWithKeys = {
+    ...params,
+    userKeys: {
+      gemini: userKeys.gemini,
+      groq: userKeys.groq,
+      huggingface: userKeys.huggingface,
+      ollama_url: userKeys.ollama_url
+    }
+  };
+
   // Otherwise, call the backend proxy
   const response = await fetch(`${BACKEND_URL}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params)
+    body: JSON.stringify(paramsWithKeys)
   });
 
   if (!response.ok) {

@@ -5,12 +5,13 @@
 
 import React, { useState, useEffect } from 'react';
 import { Routes, Route, Link, NavLink, useNavigate, useLocation, Navigate } from 'react-router-dom';
-import { Upload, FileText, Loader2, Save, CheckCircle2, AlertCircle, ChevronDown, ChevronUp, Printer, BookOpen, Sparkles, List, GraduationCap, Book as BookIcon, Folder, RefreshCw, Trash2, Eye, Copy, Search, X, Menu, Link as LinkIcon, ChevronLeft, ChevronRight, Layers, Activity } from 'lucide-react';
+import { Upload, FileText, Loader2, Save, CheckCircle2, AlertCircle, ChevronDown, ChevronUp, Printer, BookOpen, Sparkles, List, GraduationCap, Book as BookIcon, Folder, RefreshCw, Trash2, Eye, Copy, Search, X, Menu, Link as LinkIcon, ChevronLeft, ChevronRight, Layers, Activity, Settings as SettingsIcon } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { parseBookPDF, generatePlanFromContent, generatePlanFromPDFAndTopic, answerQuestionFromBook, searchBookContents, extractFullBookReaderContent, identifyBookMetadata, extractTOC, unifiedBookExtraction } from './services/geminiService';
 import { AutonomousDashboard } from './components/AutonomousDashboard';
 import { ExamGenerator } from './components/ExamGenerator';
 import { MCQGenerator } from './components/MCQGenerator';
+import { Settings } from './components/Settings';
 import { getSupabase } from './lib/supabase';
 import { LessonPlan, Book, BookContent, BookReaderContent } from './types';
 import { cn } from './lib/utils';
@@ -1144,6 +1145,7 @@ export default function App() {
             <NavLink to="/autonomous" className={({isActive}) => cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", isActive ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Autonomous</NavLink>
             <NavLink to="/exams" className={({isActive}) => cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", isActive ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Exams</NavLink>
             <NavLink to="/lesson-plans" className={({isActive}) => cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", isActive ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Lesson Plans</NavLink>
+            <NavLink to="/settings" className={({isActive}) => cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", isActive ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Settings</NavLink>
           </nav>
 
           <div className="hidden lg:flex items-center gap-2 ml-4">
@@ -1234,6 +1236,13 @@ export default function App() {
                   className={({isActive}) => cn("px-4 py-3 rounded-xl text-sm font-bold transition-all flex items-center gap-3", isActive ? "bg-indigo-50 text-indigo-600" : "text-slate-500 hover:bg-slate-50")}
                 >
                   <FileText className="w-5 h-5" /> Lesson Plans
+                </NavLink>
+                <NavLink
+                  to="/settings"
+                  onClick={() => setIsMenuOpen(false)}
+                  className={({isActive}) => cn("px-4 py-3 rounded-xl text-sm font-bold transition-all flex items-center gap-3", isActive ? "bg-indigo-50 text-indigo-600" : "text-slate-500 hover:bg-slate-50")}
+                >
+                  <SettingsIcon className="w-5 h-5" /> Settings
                 </NavLink>
               </nav>
             </motion.div>
@@ -2332,6 +2341,7 @@ Example: https://site.com/book.pdf | 10 | Science | Physics Part 1"
 
           <Route path="/autonomous" element={<AutonomousDashboard />} />
           <Route path="/exams" element={<ExamGenerator agent={selectedAgent} />} />
+          <Route path="/settings" element={<Settings />} />
           <Route path="/lesson-plans" element={
             <div className="space-y-6">
               <div className="bg-white rounded-2xl border border-slate-200 p-8 shadow-sm">

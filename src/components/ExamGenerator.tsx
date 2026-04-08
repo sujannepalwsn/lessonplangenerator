@@ -66,11 +66,15 @@ export function ExamGenerator({ agent }: { agent?: string }) {
       }
 
       // 3. Call API
+      const savedKeysRaw = localStorage.getItem('ai_api_keys');
+      const userKeys = savedKeysRaw ? JSON.parse(savedKeysRaw) : {};
+
       const response = await fetch(`${import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001'}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           agent: agent || 'gemini',
+          userKeys,
           pdfBase64: combinedFilesBase64 || undefined,
           jsonMode: true,
           prompt: `Generate a complete exam paper based on the following context.
