@@ -68,10 +68,9 @@ export async function processSinglePDF(pdfLink: PDFLink, iterationId: string, us
 
     // 2. Metadata Extraction (Gemini primary)
     try {
-      // Limit size to avoid payload issues even internally if needed
-      const base64 = pdfBuffer.slice(0, 2 * 1024 * 1024).toString('base64');
+      const base64 = pdfBuffer.slice(0, 1024 * 1024).toString('base64');
       const geminiKey = userKeys?.gemini || process.env.GEMINI_API_KEY || "";
-      const activeAI = new GoogleGenAI(geminiKey);
+      const activeAI = new GoogleGenAI({ apiKey: geminiKey });
 
       const prompt = `Identify the Grade/Class, Subject, and a clean Title for this textbook.
       Filename: ${pdfLink.title}.pdf
@@ -149,8 +148,7 @@ export async function processSinglePDF(pdfLink: PDFLink, iterationId: string, us
     try {
       console.log(`Generating initial lesson plan for: ${metadata.title}`);
       const geminiKey = userKeys?.gemini || process.env.GEMINI_API_KEY || "";
-      const activeAI = new GoogleGenAI(geminiKey);
-
+      const activeAI = new GoogleGenAI({ apiKey: geminiKey });
       const lpPrompt = `Generate a comprehensive lesson plan for the book: ${metadata.title} (Subject: ${metadata.subject}, Grade: ${metadata.grade}).
       Focus on the first introductory chapter.
       Return as a JSON object matching this schema:

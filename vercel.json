@@ -12,17 +12,9 @@
     }
   ],
   "rewrites": [
-    {
-      "source": "/api/(.*)",
-      "destination": "/server/index.ts"
-    },
-    {
-      "source": "/health",
-      "destination": "/server/index.ts"
-    },
-    {
-      "source": "/((?!api|health|assets|favicon.ico|.*\\..*).*)",
-      "destination": "/index.html"
-    }
+    { "source": "/api/(.*)", "destination": "/server/index.ts" },
+    { "source": "/health", "destination": "/server/index.ts" },
+    { "source": "/assets/(.*)", "destination": "/assets/$1" },
+    { "source": "/((?!api|health|assets|favicon.ico).*)", "destination": "/index.html" }
   ]
 }

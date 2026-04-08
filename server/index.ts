@@ -12,14 +12,13 @@ const app = express();
 const port = process.env.PORT || 3001;
 
 app.use(cors());
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ limit: '10mb', extended: true }));
+app.use(express.json());
 
 // Initialize Supabase
 const supabaseUrl = process.env.SUPABASE_URL || 'https://placeholder.supabase.co';
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 'placeholder-key';
 export const supabase = createClient(supabaseUrl, supabaseKey);
-const genAI = new GoogleGenAI(process.env.GEMINI_API_KEY || "");
+const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 
 app.get('/health', (req, res) => {
   res.json({
@@ -46,7 +45,7 @@ app.post('/api/chat', async (req, res) => {
     // If PDF is provided, we currently only support Gemini for multimodal
     if (activePdfData) {
       const geminiKey = userKeys?.gemini || process.env.GEMINI_API_KEY || "";
-      const activeAI = new GoogleGenAI(geminiKey);
+      const activeAI = new GoogleGenAI({ apiKey: geminiKey });
 
       const result = await activeAI.models.generateContent({
         model: "gemini-1.5-flash",

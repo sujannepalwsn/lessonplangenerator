@@ -42,16 +42,15 @@ export function ExamGenerator({ agent }: { agent?: string }) {
 
       const bookContext = contents?.map(c => `Topic: ${c.topic}\nContent: ${c.content}`).join('\n\n') || '';
 
-      // 2. Determine file strategy
+      // 2. Prepare files if any
       let combinedFilesBase64 = '';
       let fileInstruction = '';
-      let pdfPathToPass = '';
 
       if (cdcGridFile || samplePaperFile) {
+        // Since the current backend /api/chat only takes one pdfBase64,
+        // we'll prioritize the CDC Grid if both exist, or we could merge them if needed.
+        // For now, let's process the primary one provided.
         const fileToProcess = cdcGridFile || samplePaperFile;
-
-        // If file is very large, this might still hit 413.
-        // For Exam Gen, these are usually new uploads, so we'll try to compress or just warn.
         const reader = new FileReader();
         combinedFilesBase64 = await new Promise((resolve) => {
           reader.onload = () => resolve((reader.result as string).split(',')[1]);
@@ -64,12 +63,6 @@ export function ExamGenerator({ agent }: { agent?: string }) {
            fileInstruction = "Strictly follow the structure and mark distribution found in the attached CDC Specification Grid PDF.";
         } else {
            fileInstruction = "Use the attached Question Sample PDF as a template for the format and style of questions.";
-        }
-      } else {
-        // Fallback: use the book itself as context if no grid provided
-        const book = books.find(b => b.id === selectedBook);
-        if (book?.file_path) {
-           pdfPathToPass = book.file_path;
         }
       }
 
@@ -85,7 +78,6 @@ export function ExamGenerator({ agent }: { agent?: string }) {
           agent: agent || 'gemini',
           userKeys,
           pdfBase64: combinedFilesBase64 || undefined,
-          pdfPath: pdfPathToPass || undefined,
           jsonMode: true,
           prompt: `Generate a complete exam paper based on the following context.
 
