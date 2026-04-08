@@ -59,6 +59,7 @@ export default function App() {
   const [viewingPdfUrl, setViewingPdfUrl] = useState<string | null>(null);
   const [viewingPlan, setViewingPlan] = useState<LessonPlan | null>(null);
   const [generatedTopicIds, setGeneratedTopicIds] = useState<Set<string>>(new Set());
+  const [isBulkGeneratingMCQs, setIsBulkGeneratingMCQs] = useState(false);
 
   // Filters for Lesson Plans tab
   const [filterGrade, setFilterGrade] = useState<string>('');
@@ -748,6 +749,52 @@ export default function App() {
       URL.revokeObjectURL(viewingPdfUrl);
     }
     setViewingPdfUrl(null);
+  };
+
+  const handleBulkMCQGenerate = async () => {
+    if (!selectedBook || availableTopics.length === 0) return;
+    setIsBulkGeneratingMCQs(true);
+    setBulkProgress(0);
+    setBulkTotal(availableTopics.length);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const supabase = getSupabase();
+      let totalSaved = 0;
+
+      for (let i = 0; i < availableTopics.length; i++) {
+        const topic = availableTopics[i];
+        setBulkProgress(i + 1);
+
+        try {
+          const mcqs = await generateMCQs(topic, 3, selectedAgent);
+          const toSave = mcqs.map(q => ({
+            book_id: selectedBook.id,
+            book_content_id: topic.id,
+            type: 'mcq',
+            question_text: q.question_text,
+            options: q.options,
+            correct_answer: q.correct_answer,
+            difficulty: q.difficulty || 'medium'
+          }));
+
+          const { error: saveError } = await supabase.from('questions').insert(toSave);
+          if (!saveError) totalSaved += mcqs.length;
+
+          await new Promise(r => setTimeout(r, 500));
+        } catch (err) {
+          console.error(`Failed MCQs for ${topic.topic}:`, err);
+        }
+      }
+
+      setSuccess(`Bulk MCQ generation complete! Saved ${totalSaved} questions.`);
+    } catch (err) {
+      console.error(err);
+      setError('Bulk MCQ generation failed.');
+    } finally {
+      setIsBulkGeneratingMCQs(false);
+    }
   };
 
   const handleBulkGenerate = async () => {
@@ -1697,6 +1744,26 @@ Example: https://site.com/book.pdf | 10 | Science | Physics Part 1"
                 {selectedBook && availableTopics.length > 0 && (
                   <div className="mt-8 pt-8 border-t border-slate-100 space-y-8">
                     <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                      <div className="flex items-center gap-2">
+                        {isBulkGeneratingMCQs ? (
+                          <div className="w-48">
+                             <div className="flex justify-between text-[10px] font-bold text-indigo-600 mb-1 uppercase">
+                               <span>MCQs...</span>
+                               <span>{Math.round((bulkProgress / bulkTotal) * 100)}%</span>
+                             </div>
+                             <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                               <motion.div className="h-full bg-indigo-600" initial={{ width: 0 }} animate={{ width: `${(bulkProgress / bulkTotal) * 100}%` }} />
+                             </div>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={handleBulkMCQGenerate}
+                            className="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-lg hover:bg-indigo-100 transition-all flex items-center gap-1"
+                          >
+                            <Sparkles className="w-3 h-3" /> Bulk MCQs
+                          </button>
+                        )}
+                      </div>
                       <div className="flex items-center gap-4">
                         <h3 className="text-xl font-bold flex items-center gap-2"><List className="text-indigo-600 w-5 h-5" /> Topics & Lessons</h3>
                         <div className="text-sm text-slate-500">

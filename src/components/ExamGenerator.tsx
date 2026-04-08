@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Upload, FileText, Sparkles, Loader2, Plus, Trash2, Download, Eye, FileCheck } from 'lucide-react';
+import { downloadExamPDF } from '../lib/pdfUtils';
 import { getSupabase } from '../lib/supabase';
 import { Book } from '../types';
 import { cn } from '../lib/utils';
@@ -108,7 +109,20 @@ export function ExamGenerator({ agent }: { agent?: string }) {
 
       if (!response.ok) throw new Error('Failed to generate exam');
       const result = await response.json();
-      setGeneratedPaper(JSON.parse(result.response));
+      const paperData = JSON.parse(result.response);
+      setGeneratedPaper(paperData);
+
+      // 4. Save to Supabase
+      const { error: dbError } = await supabase.from('exam_papers').insert({
+        title: paperData.title,
+        subject: books.find(b => b.id === selectedBook)?.subject || 'Unknown',
+        class: books.find(b => b.id === selectedBook)?.class || 'General',
+        duration_minutes: paperData.duration,
+        total_marks: paperData.total_marks,
+        questions: paperData.sections
+      });
+      if (dbError) console.error('Failed to save exam to DB:', dbError);
+
     } catch (err) {
       console.error(err);
       alert('Failed to generate exam: ' + (err instanceof Error ? err.message : 'Unknown error'));
@@ -241,10 +255,16 @@ export function ExamGenerator({ agent }: { agent?: string }) {
           </div>
 
           <div className="bg-slate-50 p-6 border-t border-slate-100 flex justify-end gap-4">
-            <button className="px-6 py-2 bg-white border border-slate-200 rounded-xl font-bold text-slate-600 hover:bg-slate-100 transition-all flex items-center gap-2">
+            <button
+              onClick={() => downloadExamPDF(generatedPaper)}
+              className="px-6 py-2 bg-white border border-slate-200 rounded-xl font-bold text-slate-600 hover:bg-slate-100 transition-all flex items-center gap-2"
+            >
               <Download className="w-4 h-4" /> Download PDF
             </button>
-            <button className="px-6 py-2 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all flex items-center gap-2">
+            <button
+              onClick={() => window.print()}
+              className="px-6 py-2 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all flex items-center gap-2"
+            >
               <Eye className="w-4 h-4" /> Print Preview
             </button>
           </div>
