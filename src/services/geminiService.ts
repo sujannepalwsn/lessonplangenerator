@@ -4,7 +4,15 @@ import { LessonPlan, BookContent, BookReaderContent } from "../types";
 // Use import.meta.env for Vite/Vercel deployments, fallback to process.env for AI Studio environment
 const apiKey = import.meta.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || "";
 const ai = new GoogleGenAI({ apiKey });
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
+
+function getBackendUrl() {
+  const savedKeysRaw = localStorage.getItem('ai_api_keys');
+  if (savedKeysRaw) {
+    const keys = JSON.parse(savedKeysRaw);
+    if (keys.backend_url) return keys.backend_url;
+  }
+  return import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
+}
 
 /**
  * Helper function to call either Gemini directly (if gemini selected)
@@ -42,24 +50,31 @@ async function callAgentAPI(params: {
       gemini: userKeys.gemini,
       groq: userKeys.groq,
       huggingface: userKeys.huggingface,
-      ollama_url: userKeys.ollama_url
+      ollama_url: userKeys.ollama_url,
+      ollama_model: userKeys.ollama_model
     }
   };
 
   // Otherwise, call the backend proxy
-  const response = await fetch(`${BACKEND_URL}/api/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(paramsWithKeys)
-  });
+  try {
+    const response = await fetch(`${getBackendUrl()}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(paramsWithKeys)
+    });
 
-  if (!response.ok) {
-    const err = await response.json();
-    throw new Error(err.error || 'Failed to call agent');
+    if (!response.ok) {
+      const err = await response.json();
+      throw new Error(err.error || 'Failed to call agent');
+    }
+    const data = await response.json();
+    return { text: () => data.response };
+  } catch (err: any) {
+    if (err.message.includes('Failed to fetch') || err.message.includes('net::ERR_CONNECTION_REFUSED')) {
+       throw new Error(`Connection to AI Agent failed. Please ensure the backend server is running at ${getBackendUrl()} or check your Settings.`);
+    }
+    throw err;
   }
-
-  const data = await response.json();
-  return { text: () => data.response };
 }
 
 /**

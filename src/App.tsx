@@ -54,7 +54,8 @@ export default function App() {
   const [selectedBook, setSelectedBook] = useState<Book | null>(null);
   const [selectedTopic, setSelectedTopic] = useState<BookContent | null>(null);
   const [targetLanguage, setTargetLanguage] = useState<string>('English');
-  const [selectedAgent, setSelectedAgent] = useState<string>('gemini');
+  const [selectedAgent, setSelectedAgent] = useState<string>(() => localStorage.getItem('preferred_agent') || 'gemini');
+  const [isBackendOnline, setIsBackendOnline] = useState<boolean | null>(null);
   const [viewingPdfUrl, setViewingPdfUrl] = useState<string | null>(null);
   const [viewingPlan, setViewingPlan] = useState<LessonPlan | null>(null);
   const [generatedTopicIds, setGeneratedTopicIds] = useState<Set<string>>(new Set());
@@ -84,7 +85,25 @@ export default function App() {
     fetchGrades();
     fetchHistory();
     fetchAllBooks();
+    checkBackendHealth();
+    const interval = setInterval(checkBackendHealth, 5000);
+    return () => clearInterval(interval);
   }, []);
+
+  const checkBackendHealth = async () => {
+    try {
+      const savedKeysRaw = localStorage.getItem('ai_api_keys');
+      let url = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
+      if (savedKeysRaw) {
+        const keys = JSON.parse(savedKeysRaw);
+        if (keys.backend_url) url = keys.backend_url;
+      }
+      const response = await fetch(`${url}/health`).catch(() => null);
+      setIsBackendOnline(!!response?.ok);
+    } catch {
+      setIsBackendOnline(false);
+    }
+  };
 
   const fetchAllBooks = async () => {
     try {
@@ -1148,11 +1167,23 @@ export default function App() {
             <NavLink to="/settings" className={({isActive}) => cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", isActive ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Settings</NavLink>
           </nav>
 
-          <div className="hidden lg:flex items-center gap-2 ml-4">
+          <div className="hidden lg:flex items-center gap-4 ml-4">
+            <div className={cn(
+              "px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-widest flex items-center gap-1",
+              isBackendOnline ? "bg-emerald-100 text-emerald-600" : "bg-red-100 text-red-600"
+            )}>
+              <div className={cn("w-1.5 h-1.5 rounded-full", isBackendOnline ? "bg-emerald-500" : "bg-red-500")}></div>
+              {isBackendOnline ? "Agent Online" : "Agent Offline"}
+            </div>
+            <div className="h-4 w-px bg-slate-200"></div>
             <span className="text-[10px] font-bold text-slate-400 uppercase">Agent:</span>
             <select
               value={selectedAgent}
-              onChange={(e) => setSelectedAgent(e.target.value)}
+              onChange={(e) => {
+                const val = e.target.value;
+                setSelectedAgent(val);
+                localStorage.setItem('preferred_agent', val);
+              }}
               className="text-xs font-bold bg-slate-100 border-none rounded-lg px-2 py-1 outline-none text-indigo-600"
             >
               <option value="gemini">Gemini (Auto)</option>

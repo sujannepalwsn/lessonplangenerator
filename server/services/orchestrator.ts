@@ -217,11 +217,12 @@ export async function runAutonomousIngestion(startUrl: string, userKeys: any = {
   if (!iteration) throw new Error('Failed to start iteration: ' + iterError?.message);
   const iterationId = iteration.id;
 
+  const activeGeminiKey = userKeys?.gemini || apiKey;
   try {
     // 1. Scrape for PDF links
     let links: PDFLink[] = [];
     try {
-      links = await scrapePDFLinksWithGemini(startUrl, apiKey);
+      links = await scrapePDFLinksWithGemini(startUrl, activeGeminiKey);
     } catch (err) {
       console.warn('Gemini discovery failed, falling back to Playwright/DOM scraper:', err);
       links = await scrapePDFLinks(startUrl);

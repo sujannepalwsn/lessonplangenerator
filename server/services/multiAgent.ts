@@ -31,7 +31,7 @@ export async function callAgent(
     case 'huggingface':
       return callHuggingFace(prompt, systemInstruction, userKeys.huggingface);
     case 'ollama':
-      return callOllama(prompt, systemInstruction, jsonMode, userKeys.ollama_url);
+      return callOllama(prompt, systemInstruction, jsonMode, userKeys.ollama_url, userKeys.ollama_model);
     default:
       return callGemini(prompt, systemInstruction, jsonMode, userKeys.gemini);
   }
@@ -84,12 +84,12 @@ async function callHuggingFace(prompt: string, system?: string, customKey?: stri
   return response.data[0]?.generated_text || "";
 }
 
-async function callOllama(prompt: string, system?: string, jsonMode?: boolean, customUrl?: string): Promise<string> {
+async function callOllama(prompt: string, system?: string, jsonMode?: boolean, customUrl?: string, customModel?: string): Promise<string> {
   const ollamaUrl = customUrl || process.env.OLLAMA_URL || 'http://localhost:11434';
   const fullPrompt = system ? `${system}\n\n${prompt}` : prompt;
 
   const response = await axios.post(`${ollamaUrl}/api/generate`, {
-    model: process.env.OLLAMA_MODEL || 'llama3',
+    model: customModel || process.env.OLLAMA_MODEL || 'llama3',
     prompt: fullPrompt,
     stream: false,
     format: jsonMode ? 'json' : undefined

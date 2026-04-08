@@ -20,7 +20,14 @@ interface Iteration {
   processed_files: number;
 }
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
+function getBackendUrl() {
+  const savedKeysRaw = localStorage.getItem('ai_api_keys');
+  if (savedKeysRaw) {
+    const keys = JSON.parse(savedKeysRaw);
+    if (keys.backend_url) return keys.backend_url;
+  }
+  return import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
+}
 
 export function AutonomousDashboard() {
   const [startUrl, setStartUrl] = useState('');
@@ -33,7 +40,7 @@ export function AutonomousDashboard() {
 
   const fetchStatus = async () => {
     try {
-      const response = await fetch(`${BACKEND_URL}/api/autonomous/status`);
+      const response = await fetch(`${getBackendUrl()}/api/autonomous/status`);
       if (!response.ok) throw new Error(`Backend error: ${response.statusText}`);
       const data = await response.json();
 
@@ -64,23 +71,31 @@ export function AutonomousDashboard() {
       new URL(startUrl);
 
       // 2. Check backend health
-      const healthCheck = await fetch(`${BACKEND_URL}/health`).catch(() => null);
+      const backendUrl = getBackendUrl();
+      const healthCheck = await fetch(`${backendUrl}/health`).catch(() => null);
       if (!healthCheck || !healthCheck.ok) {
-        throw new Error(`Cannot connect to Backend Agent at ${BACKEND_URL}. Please ensure the server is running on port 3001.`);
+        throw new Error(`Cannot connect to Backend Agent at ${backendUrl}. Please ensure the server is running or check your Settings.`);
       }
 
       // Get keys from localStorage
       const savedKeysRaw = localStorage.getItem('ai_api_keys');
       const userKeys = savedKeysRaw ? JSON.parse(savedKeysRaw) : {};
 
-      const response = await fetch(`${BACKEND_URL}/api/autonomous/start`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: startUrl, userKeys })
-      });
+      try {
+        const response = await fetch(`${backendUrl}/api/autonomous/start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: startUrl, userKeys })
+        });
 
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Failed to start ingestion');
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Failed to start ingestion');
+      } catch (err: any) {
+        if (err.message.includes('Failed to fetch') || err.message.includes('net::ERR_CONNECTION_REFUSED')) {
+           throw new Error(`Connection to AI Agent failed. Please ensure the backend server is running at ${backendUrl} or check your Settings.`);
+        }
+        throw err;
+      }
 
       setStatus('running');
       setError(null);
