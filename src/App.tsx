@@ -54,7 +54,7 @@ export default function App() {
   const [selectedBook, setSelectedBook] = useState<Book | null>(null);
   const [selectedTopic, setSelectedTopic] = useState<BookContent | null>(null);
   const [targetLanguage, setTargetLanguage] = useState<string>('English');
-  const [selectedAgent, setSelectedAgent] = useState<string>('gemini');
+  const [selectedAgent, setSelectedAgent] = useState<string>(() => localStorage.getItem('preferred_agent') || 'gemini');
   const [viewingPdfUrl, setViewingPdfUrl] = useState<string | null>(null);
   const [viewingPlan, setViewingPlan] = useState<LessonPlan | null>(null);
   const [generatedTopicIds, setGeneratedTopicIds] = useState<Set<string>>(new Set());
@@ -1152,7 +1152,11 @@ export default function App() {
             <span className="text-[10px] font-bold text-slate-400 uppercase">Agent:</span>
             <select
               value={selectedAgent}
-              onChange={(e) => setSelectedAgent(e.target.value)}
+              onChange={(e) => {
+                const val = e.target.value;
+                setSelectedAgent(val);
+                localStorage.setItem('preferred_agent', val);
+              }}
               className="text-xs font-bold bg-slate-100 border-none rounded-lg px-2 py-1 outline-none text-indigo-600"
             >
               <option value="gemini">Gemini (Auto)</option>

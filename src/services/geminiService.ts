@@ -42,7 +42,8 @@ async function callAgentAPI(params: {
       gemini: userKeys.gemini,
       groq: userKeys.groq,
       huggingface: userKeys.huggingface,
-      ollama_url: userKeys.ollama_url
+      ollama_url: userKeys.ollama_url,
+      ollama_model: userKeys.ollama_model
     }
   };
 
