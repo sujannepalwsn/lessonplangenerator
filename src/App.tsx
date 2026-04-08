@@ -5,9 +5,10 @@
 
 import React, { useState, useEffect } from 'react';
 import { Routes, Route, Link, NavLink, useNavigate, useLocation, Navigate } from 'react-router-dom';
-import { Upload, FileText, Loader2, Save, CheckCircle2, AlertCircle, ChevronDown, ChevronUp, Printer, BookOpen, Sparkles, List, GraduationCap, Book as BookIcon, Folder, RefreshCw, Trash2, Eye, Copy, Search, X, Menu, Link as LinkIcon, ChevronLeft, ChevronRight, Layers } from 'lucide-react';
+import { Upload, FileText, Loader2, Save, CheckCircle2, AlertCircle, ChevronDown, ChevronUp, Printer, BookOpen, Sparkles, List, GraduationCap, Book as BookIcon, Folder, RefreshCw, Trash2, Eye, Copy, Search, X, Menu, Link as LinkIcon, ChevronLeft, ChevronRight, Layers, Activity } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { parseBookPDF, generatePlanFromContent, generatePlanFromPDFAndTopic, answerQuestionFromBook, searchBookContents, extractFullBookReaderContent, identifyBookMetadata } from './services/geminiService';
+import { AutonomousDashboard } from './components/AutonomousDashboard';
 import { getSupabase } from './lib/supabase';
 import { LessonPlan, Book, BookContent, BookReaderContent } from './types';
 import { cn } from './lib/utils';
@@ -1148,6 +1149,7 @@ export default function App() {
             <NavLink to="/generator" className={({isActive}) => cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", isActive ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Generator</NavLink>
             <NavLink to="/reader" className={({isActive}) => cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", isActive ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Reader</NavLink>
             <NavLink to="/qa" className={({isActive}) => cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", isActive ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Q&A</NavLink>
+            <NavLink to="/autonomous" className={({isActive}) => cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", isActive ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Autonomous</NavLink>
             <NavLink to="/lesson-plans" className={({isActive}) => cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", isActive ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Lesson Plans</NavLink>
           </nav>
 
@@ -1204,6 +1206,13 @@ export default function App() {
                   className={({isActive}) => cn("px-4 py-3 rounded-xl text-sm font-bold transition-all flex items-center gap-3", isActive ? "bg-indigo-50 text-indigo-600" : "text-slate-500 hover:bg-slate-50")}
                 >
                   <Search className="w-5 h-5" /> Q&A
+                </NavLink>
+                <NavLink
+                  to="/autonomous"
+                  onClick={() => setIsMenuOpen(false)}
+                  className={({isActive}) => cn("px-4 py-3 rounded-xl text-sm font-bold transition-all flex items-center gap-3", isActive ? "bg-indigo-50 text-indigo-600" : "text-slate-500 hover:bg-slate-50")}
+                >
+                  <Activity className="w-5 h-5" /> Autonomous
                 </NavLink>
                 <NavLink 
                   to="/lesson-plans" 
@@ -2303,6 +2312,7 @@ Example: https://site.com/book.pdf | 10 | Science | Physics Part 1"
             </section>
           } />
 
+          <Route path="/autonomous" element={<AutonomousDashboard />} />
           <Route path="/lesson-plans" element={
             <div className="space-y-6">
               <div className="bg-white rounded-2xl border border-slate-200 p-8 shadow-sm">
