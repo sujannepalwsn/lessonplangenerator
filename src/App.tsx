@@ -787,23 +787,6 @@ export default function App() {
     try {
       const supabase = getSupabase();
       
-      // Get PDF base64 if available for better generation
-      let pdfBase64: string | null = null;
-      if (selectedBook.file_path) {
-        const { data: pdfBlob, error: downloadError } = await supabase.storage
-          .from('books')
-          .download(selectedBook.file_path);
-        
-        if (!downloadError) {
-          const reader = new FileReader();
-          pdfBase64 = await new Promise<string>((resolve, reject) => {
-            reader.onload = () => resolve((reader.result as string).split(',')[1]);
-            reader.onerror = reject;
-            reader.readAsDataURL(pdfBlob);
-          });
-        }
-      }
-
       for (let i = 0; i < availableTopics.length; i++) {
         const topic = availableTopics[i];
         setBulkProgress(i + 1);
@@ -817,8 +800,8 @@ export default function App() {
 
         let plan: LessonPlan;
         try {
-          if (pdfBase64) {
-            plan = await generatePlanFromPDFAndTopic(pdfBase64, topic, selectedSubject, selectedGrade, targetLanguage, selectedAgent);
+          if (selectedBook.file_path) {
+            plan = await generatePlanFromPDFAndTopic("", topic, selectedSubject, selectedGrade, targetLanguage, selectedAgent, selectedBook.file_path);
           } else {
             plan = await generatePlanFromContent(topic, selectedSubject, selectedGrade, targetLanguage, selectedAgent);
           }
@@ -927,21 +910,7 @@ export default function App() {
       let plan: LessonPlan;
 
       if (forceRegenerate && selectedBook?.file_path) {
-        // "Study the document and regenerate"
-        const { data: pdfBlob, error: downloadError } = await supabase.storage
-          .from('books')
-          .download(selectedBook.file_path);
-        
-        if (downloadError) throw downloadError;
-
-        const reader = new FileReader();
-        const pdfBase64 = await new Promise<string>((resolve, reject) => {
-          reader.onload = () => resolve((reader.result as string).split(',')[1]);
-          reader.onerror = reject;
-          reader.readAsDataURL(pdfBlob);
-        });
-
-        plan = await generatePlanFromPDFAndTopic(pdfBase64, content, selectedSubject, selectedGrade, targetLanguage, selectedAgent);
+        plan = await generatePlanFromPDFAndTopic("", content, selectedSubject, selectedGrade, targetLanguage, selectedAgent, selectedBook.file_path);
       } else {
         plan = await generatePlanFromContent(content, selectedSubject, selectedGrade, targetLanguage, selectedAgent);
       }

@@ -40,10 +40,16 @@ export function AutonomousDashboard() {
 
   const fetchStatus = async () => {
     try {
-      const response = await fetch(`${getBackendUrl()}/api/autonomous/status`);
-      if (!response.ok) throw new Error(`Backend error: ${response.statusText}`);
-      const data = await response.json();
+      const backendUrl = getBackendUrl();
+      const response = await fetch(`${backendUrl}/api/autonomous/status`);
 
+      if (!response.ok) {
+         // Silently handle 404 or other errors during initial polling
+         setIsBackendConnected(false);
+         return;
+      }
+
+      const data = await response.json();
       setIsBackendConnected(true);
       if (data.status) {
         setStatus(data.status);

@@ -327,10 +327,11 @@ export async function generatePlanFromContent(content: BookContent, subject: str
   }
 }
 
-export async function generatePlanFromPDFAndTopic(pdfBase64: string, content: BookContent, subject: string, className: string, targetLanguage: string = 'English', agent: string = 'gemini'): Promise<LessonPlan> {
+export async function generatePlanFromPDFAndTopic(pdfBase64: string, content: BookContent, subject: string, className: string, targetLanguage: string = 'English', agent: string = 'gemini', pdfPath?: string): Promise<LessonPlan> {
   const response = await callAgentAPI({
     agent,
-    pdfBase64,
+    pdfBase64: pdfPath ? undefined : pdfBase64,
+    pdfPath,
     jsonMode: true,
     prompt: `Study the provided textbook PDF and generate a detailed lesson plan for the specific topic below.
             IMPORTANT: Generate the entire lesson plan in ${targetLanguage}. 
