@@ -20,7 +20,14 @@ interface Iteration {
   processed_files: number;
 }
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
+function getBackendUrl() {
+  const savedKeysRaw = localStorage.getItem('ai_api_keys');
+  if (savedKeysRaw) {
+    const keys = JSON.parse(savedKeysRaw);
+    if (keys.backend_url) return keys.backend_url;
+  }
+  return import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
+}
 
 export function AutonomousDashboard() {
   const [startUrl, setStartUrl] = useState('');
@@ -33,7 +40,7 @@ export function AutonomousDashboard() {
 
   const fetchStatus = async () => {
     try {
-      const response = await fetch(`${BACKEND_URL}/api/autonomous/status`);
+      const response = await fetch(`${getBackendUrl()}/api/autonomous/status`);
       if (!response.ok) throw new Error(`Backend error: ${response.statusText}`);
       const data = await response.json();
 

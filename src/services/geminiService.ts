@@ -4,7 +4,15 @@ import { LessonPlan, BookContent, BookReaderContent } from "../types";
 // Use import.meta.env for Vite/Vercel deployments, fallback to process.env for AI Studio environment
 const apiKey = import.meta.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || "";
 const ai = new GoogleGenAI({ apiKey });
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
+
+function getBackendUrl() {
+  const savedKeysRaw = localStorage.getItem('ai_api_keys');
+  if (savedKeysRaw) {
+    const keys = JSON.parse(savedKeysRaw);
+    if (keys.backend_url) return keys.backend_url;
+  }
+  return import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
+}
 
 /**
  * Helper function to call either Gemini directly (if gemini selected)
@@ -48,7 +56,7 @@ async function callAgentAPI(params: {
   };
 
   // Otherwise, call the backend proxy
-  const response = await fetch(`${BACKEND_URL}/api/chat`, {
+  const response = await fetch(`${getBackendUrl()}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(paramsWithKeys)

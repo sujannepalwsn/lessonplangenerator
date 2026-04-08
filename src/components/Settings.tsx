@@ -7,7 +7,8 @@ export function Settings() {
     groq: '',
     huggingface: '',
     ollama_url: 'http://localhost:11434',
-    ollama_model: 'llama3'
+    ollama_model: 'llama3',
+    backend_url: import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001'
   });
   const [success, setSuccess] = useState(false);
 
@@ -33,7 +34,8 @@ export function Settings() {
         groq: '',
         huggingface: '',
         ollama_url: 'http://localhost:11434',
-        ollama_model: 'llama3'
+        ollama_model: 'llama3',
+        backend_url: import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001'
       });
     }
   };
@@ -59,6 +61,23 @@ export function Settings() {
         )}
 
         <div className="space-y-6">
+          {/* Backend URL */}
+          <div className="space-y-2">
+            <label className="text-xs font-bold text-indigo-600 uppercase flex items-center gap-2">
+              <Globe className="w-3 h-3" /> Backend Agent URL
+            </label>
+            <input
+              type="text"
+              value={keys.backend_url}
+              onChange={e => setKeys({...keys, backend_url: e.target.value})}
+              placeholder="http://localhost:3001"
+              className="w-full px-4 py-3 bg-indigo-50/50 border border-indigo-100 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-mono text-sm"
+            />
+            <p className="text-[10px] text-slate-400 italic">If your agent is hosted (e.g., on Vercel), enter the full URL here.</p>
+          </div>
+
+          <div className="border-t border-slate-100 my-6"></div>
+
           {/* Gemini */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">

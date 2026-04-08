@@ -68,8 +68,9 @@ export function ExamGenerator({ agent }: { agent?: string }) {
       // 3. Call API
       const savedKeysRaw = localStorage.getItem('ai_api_keys');
       const userKeys = savedKeysRaw ? JSON.parse(savedKeysRaw) : {};
+      const backendUrl = userKeys.backend_url || import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
 
-      const response = await fetch(`${import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001'}/api/chat`, {
+      const response = await fetch(`${backendUrl}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
