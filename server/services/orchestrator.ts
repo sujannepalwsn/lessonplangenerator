@@ -2,6 +2,7 @@ import { supabase } from '../index.js';
 import { scrapePDFLinks, scrapePDFLinksWithGemini, PDFLink } from '../agents/scraper.js';
 import { downloadPDF, extractMetadataWithOllama, BookMetadata } from '../agents/metadata.js';
 import { GoogleGenAI, Type } from "@google/genai";
+import { callAgent } from './multiAgent.js';
 import crypto from 'crypto';
 
 // Configuration
@@ -68,7 +69,7 @@ export async function processSinglePDF(pdfLink: PDFLink, iterationId: string) {
     // 2. Metadata Extraction (Gemini primary)
     try {
       const base64 = pdfBuffer.slice(0, 1024 * 1024).toString('base64');
-      const model = ai.getGenerativeModel({ model: "gemini-1.5-flash" }); // Update to latest stable or requested
+      const model = ai.getGenerativeModel({ model: "gemini-1.5-flash" });
 
       const prompt = `Identify the Grade/Class, Subject, and a clean Title for this textbook.
       Filename: ${pdfLink.title}.pdf
@@ -90,9 +91,22 @@ export async function processSinglePDF(pdfLink: PDFLink, iterationId: string) {
                           geminiError?.message?.includes("quota");
 
       if (isRateLimit) {
-        console.warn('Gemini quota reached. Falling back to local agents...');
-        metadata = await extractMetadataWithOllama(pdfBuffer, pdfLink.title);
-        agentType = 'free-agent';
+        console.warn('Gemini quota reached. Falling back to other agents...');
+        // Try Groq as secondary
+        try {
+          const textSnippet = pdfBuffer.slice(0, 2000).toString('utf-8'); // Rough fallback
+          const extractedText = await callAgent('groq',
+            `Identify Title, Subject, Class for: ${pdfLink.title}. Contents: ${textSnippet}`,
+            "Return JSON: {title, subject, class}",
+            true
+          );
+          const extracted = JSON.parse(extractedText);
+          metadata = { title: extracted.title, grade: extracted.class, subject: extracted.subject };
+          agentType = 'groq';
+        } catch (fallbackErr) {
+          metadata = await extractMetadataWithOllama(pdfBuffer, pdfLink.title);
+          agentType = 'ollama';
+        }
       } else {
         throw geminiError;
       }
