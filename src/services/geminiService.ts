@@ -56,19 +56,25 @@ async function callAgentAPI(params: {
   };
 
   // Otherwise, call the backend proxy
-  const response = await fetch(`${getBackendUrl()}/api/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(paramsWithKeys)
-  });
+  try {
+    const response = await fetch(`${getBackendUrl()}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(paramsWithKeys)
+    });
 
-  if (!response.ok) {
-    const err = await response.json();
-    throw new Error(err.error || 'Failed to call agent');
+    if (!response.ok) {
+      const err = await response.json();
+      throw new Error(err.error || 'Failed to call agent');
+    }
+    const data = await response.json();
+    return { text: () => data.response };
+  } catch (err: any) {
+    if (err.message.includes('Failed to fetch') || err.message.includes('net::ERR_CONNECTION_REFUSED')) {
+       throw new Error(`Connection to AI Agent failed. Please ensure the backend server is running at ${getBackendUrl()} or check your Settings.`);
+    }
+    throw err;
   }
-
-  const data = await response.json();
-  return { text: () => data.response };
 }
 
 /**

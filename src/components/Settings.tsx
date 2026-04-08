@@ -174,13 +174,29 @@ export function Settings() {
         </div>
       </div>
 
-      <div className="bg-amber-50 border border-amber-100 p-6 rounded-3xl">
-        <h4 className="text-amber-800 font-bold mb-2 flex items-center gap-2 uppercase text-xs">
-          <ShieldCheck className="w-4 h-4" /> Privacy Note
-        </h4>
-        <p className="text-amber-700 text-sm leading-relaxed">
-          Your API keys are stored locally in your browser's <strong>localStorage</strong>. They are only sent to the backend proxy for the duration of the request and are never stored on our servers.
-        </p>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="bg-amber-50 border border-amber-100 p-6 rounded-3xl">
+          <h4 className="text-amber-800 font-bold mb-2 flex items-center gap-2 uppercase text-xs">
+            <ShieldCheck className="w-4 h-4" /> Privacy Note
+          </h4>
+          <p className="text-amber-700 text-sm leading-relaxed">
+            Your API keys are stored locally in your browser's <strong>localStorage</strong>. They are only sent to the backend proxy for the duration of the request and are never stored on our servers.
+          </p>
+        </div>
+
+        <div className="bg-indigo-50 border border-indigo-100 p-6 rounded-3xl">
+          <h4 className="text-indigo-800 font-bold mb-2 flex items-center gap-2 uppercase text-xs">
+            <Globe className="w-4 h-4" /> Troubleshooting
+          </h4>
+          <div className="text-indigo-700 text-sm space-y-2">
+             <p>Seeing <strong>net::ERR_CONNECTION_REFUSED</strong>?</p>
+             <ul className="list-disc list-inside space-y-1 ml-2">
+               <li>Ensure the backend is running (<code>npm run dev</code> in <code>/server</code>).</li>
+               <li>Check if port <strong>3001</strong> is open.</li>
+               <li>If your agent is online (e.g. Vercel), update the <strong>Backend URL</strong> above.</li>
+             </ul>
+          </div>
+        </div>
       </div>
     </div>
   );
