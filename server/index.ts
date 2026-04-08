@@ -98,6 +98,10 @@ app.get('/api/autonomous/status', async (req, res) => {
   }
 });
 
-app.listen(port, () => {
-  console.log(`Backend server running on http://localhost:${port}`);
-});
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(port, () => {
+    console.log(`Backend server running on http://localhost:${port}`);
+  });
+}
+
+export default app;
