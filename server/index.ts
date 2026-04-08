@@ -29,11 +29,13 @@ app.get('/health', (req, res) => {
 });
 
 app.post('/api/chat', async (req, res) => {
-  const { prompt, system, agent, jsonMode, pdfBase64 } = req.body;
+  const { prompt, system, agent, jsonMode, pdfBase64, userKeys } = req.body;
   try {
     // If PDF is provided, we currently only support Gemini for multimodal
     if (pdfBase64) {
-      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+      const geminiKey = userKeys?.gemini || process.env.GEMINI_API_KEY || "";
+      const activeAI = new GoogleGenAI(geminiKey);
+      const model = activeAI.getGenerativeModel({ model: "gemini-1.5-flash" });
       const result = await model.generateContent([
         { inlineData: { mimeType: "application/pdf", data: pdfBase64 } },
         { text: (system ? system + "\n\n" : "") + prompt }
@@ -44,7 +46,7 @@ app.post('/api/chat', async (req, res) => {
       return res.json({ response: text });
     }
 
-    const response = await callAgent(agent as AgentType, prompt, system, jsonMode);
+    const response = await callAgent(agent as AgentType, prompt, system, jsonMode, userKeys);
     res.json({ response });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -53,14 +55,14 @@ app.post('/api/chat', async (req, res) => {
 
 // Basic structure for agent endpoints
 app.post('/api/autonomous/start', async (req, res) => {
-  const { url } = req.body;
+  const { url, userKeys } = req.body;
 
   if (!url) {
     return res.status(400).json({ error: 'URL is required' });
   }
 
   // Trigger ingestion in background
-  runAutonomousIngestion(url).catch(console.error);
+  runAutonomousIngestion(url, userKeys).catch(console.error);
 
   res.json({ message: 'Autonomous ingestion started in background', url });
 });

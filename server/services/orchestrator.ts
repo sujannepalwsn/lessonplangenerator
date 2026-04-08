@@ -32,7 +32,7 @@ function cleanJSON(text: string): string {
   return text.replace(/```json\n?|```/g, '').trim();
 }
 
-export async function processSinglePDF(pdfLink: PDFLink, iterationId: string) {
+export async function processSinglePDF(pdfLink: PDFLink, iterationId: string, userKeys: any = {}) {
   let agentType = 'gemini';
   let metadata: BookMetadata | null = null;
   let status = 'processing';
@@ -69,7 +69,9 @@ export async function processSinglePDF(pdfLink: PDFLink, iterationId: string) {
     // 2. Metadata Extraction (Gemini primary)
     try {
       const base64 = pdfBuffer.slice(0, 1024 * 1024).toString('base64');
-      const model = ai.getGenerativeModel({ model: "gemini-1.5-flash" });
+      const geminiKey = userKeys?.gemini || process.env.GEMINI_API_KEY || "";
+      const activeAI = new GoogleGenAI(geminiKey);
+      const model = activeAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
       const prompt = `Identify the Grade/Class, Subject, and a clean Title for this textbook.
       Filename: ${pdfLink.title}.pdf
@@ -98,7 +100,8 @@ export async function processSinglePDF(pdfLink: PDFLink, iterationId: string) {
           const extractedText = await callAgent('groq',
             `Identify Title, Subject, Class for: ${pdfLink.title}. Contents: ${textSnippet}`,
             "Return JSON: {title, subject, class}",
-            true
+            true,
+            userKeys
           );
           const extracted = JSON.parse(extractedText);
           metadata = { title: extracted.title, grade: extracted.class, subject: extracted.subject };
@@ -140,7 +143,9 @@ export async function processSinglePDF(pdfLink: PDFLink, iterationId: string) {
     // 5. Generate Initial Lesson Plan (Goal Requirement)
     try {
       console.log(`Generating initial lesson plan for: ${metadata.title}`);
-      const model = ai.getGenerativeModel({ model: "gemini-1.5-flash" });
+      const geminiKey = userKeys?.gemini || process.env.GEMINI_API_KEY || "";
+      const activeAI = new GoogleGenAI(geminiKey);
+      const model = activeAI.getGenerativeModel({ model: "gemini-1.5-flash" });
       const lpPrompt = `Generate a comprehensive lesson plan for the book: ${metadata.title} (Subject: ${metadata.subject}, Grade: ${metadata.grade}).
       Focus on the first introductory chapter.
       Return as a JSON object matching this schema:
@@ -201,7 +206,7 @@ export async function processSinglePDF(pdfLink: PDFLink, iterationId: string) {
   }
 }
 
-export async function runAutonomousIngestion(startUrl: string) {
+export async function runAutonomousIngestion(startUrl: string, userKeys: any = {}) {
   // Create a new iteration
   const { data: iteration, error: iterError } = await supabase
     .from('iteration_status')
@@ -232,7 +237,7 @@ export async function runAutonomousIngestion(startUrl: string) {
     // 2. Process each link one by one
     let processedCount = 0;
     for (const link of links) {
-      await processSinglePDF(link, iterationId);
+      await processSinglePDF(link, iterationId, userKeys);
       processedCount++;
       await supabase.from('iteration_status').update({ processed_files: processedCount }).eq('id', iterationId);
 

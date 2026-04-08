@@ -69,10 +69,14 @@ export function AutonomousDashboard() {
         throw new Error(`Cannot connect to Backend Agent at ${BACKEND_URL}. Please ensure the server is running on port 3001.`);
       }
 
+      // Get keys from localStorage
+      const savedKeysRaw = localStorage.getItem('ai_api_keys');
+      const userKeys = savedKeysRaw ? JSON.parse(savedKeysRaw) : {};
+
       const response = await fetch(`${BACKEND_URL}/api/autonomous/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: startUrl })
+        body: JSON.stringify({ url: startUrl, userKeys })
       });
 
       const data = await response.json();
