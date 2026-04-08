@@ -23,7 +23,8 @@ async function callAgentAPI(params: {
   system?: string,
   agent?: string,
   jsonMode?: boolean,
-  pdfBase64?: string
+  pdfBase64?: string,
+  pdfPath?: string
 }): Promise<any> {
   const agent = params.agent || 'gemini';
 
@@ -117,10 +118,11 @@ async function callGeminiWithRetry(params: any, maxRetries = 3): Promise<any> {
 /**
  * First step: Extract the Table of Contents from the PDF
  */
-export async function extractTOC(pdfBase64: string): Promise<any[]> {
+export async function extractTOC(pdfBase64: string, pdfPath?: string): Promise<any[]> {
   const response = await callAgentAPI({
     agent: "gemini", // Extraction usually needs multimodal
-    pdfBase64: pdfBase64,
+    pdfBase64: pdfPath ? undefined : pdfBase64,
+    pdfPath: pdfPath,
     jsonMode: true,
     prompt: `Extract the Table of Contents from this textbook PDF.
             Identify every Unit, Chapter, and Lesson.
@@ -142,10 +144,11 @@ export async function extractTOC(pdfBase64: string): Promise<any[]> {
  * Unified extraction for both Lesson Planning and Reader
  * Processes the book in chunks based on TOC to ensure no topic is missed.
  */
-export async function unifiedBookExtraction(pdfBase64: string, tocItem: any): Promise<Partial<BookContent>> {
+export async function unifiedBookExtraction(pdfBase64: string, tocItem: any, pdfPath?: string): Promise<Partial<BookContent>> {
   const response = await callAgentAPI({
     agent: "gemini",
-    pdfBase64: pdfBase64,
+    pdfBase64: pdfPath ? undefined : pdfBase64,
+    pdfPath: pdfPath,
     jsonMode: true,
     prompt: `You are an expert academic analyzer. Extract detailed content for the following section from this textbook.
             
@@ -180,14 +183,14 @@ export async function unifiedBookExtraction(pdfBase64: string, tocItem: any): Pr
 /**
  * Compatibility wrappers for existing code
  */
-export async function parseBookPDF(pdfBase64: string): Promise<Partial<BookContent>[]> {
+export async function parseBookPDF(pdfBase64: string, pdfPath?: string): Promise<Partial<BookContent>[]> {
   // Legacy support - but we'll use the new unified method
-  const toc = await extractTOC(pdfBase64);
+  const toc = await extractTOC(pdfBase64, pdfPath);
   const results: Partial<BookContent>[] = [];
 
   // Process every item from the TOC to ensure nothing is missed
   for (const item of toc) {
-    const details = await unifiedBookExtraction(pdfBase64, item);
+    const details = await unifiedBookExtraction(pdfBase64, item, pdfPath);
     results.push(details);
   }
   return results;

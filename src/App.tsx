@@ -583,54 +583,32 @@ export default function App() {
     setParsedReaderContents([]);
 
     try {
-      const supabase = getSupabase();
+      // New Strategy: Instead of downloading to browser and sending large base64,
+      // pass the file path to the backend.
+      const toc = await extractTOC("", book.file_path);
+      setBulkTotal(toc.length);
+      setBulkProgress(0);
       
-      // 1. Download file from storage
-      const { data, error: downloadError } = await supabase.storage
-        .from('books')
-        .download(book.file_path);
+      const allExtracted: Partial<BookContent>[] = [];
 
-      if (downloadError) throw downloadError;
-
-      // 2. Convert blob to base64
-      const reader = new FileReader();
-      reader.readAsDataURL(data);
-      reader.onload = async () => {
+      for (let i = 0; i < toc.length; i++) {
+        setBulkProgress(i + 1);
         try {
-          const base64 = (reader.result as string).split(',')[1];
-          
-          // 3. New TOC-First Unified Extraction
-          const toc = await extractTOC(base64);
-          setBulkTotal(toc.length);
-          setBulkProgress(0);
-
-          const allExtracted: Partial<BookContent>[] = [];
-
-          for (let i = 0; i < toc.length; i++) {
-            setBulkProgress(i + 1);
-            try {
-              const details = await unifiedBookExtraction(base64, toc[i]);
-              allExtracted.push(details);
-              // Update state incrementally so user sees progress
-              setParsedContents([...allExtracted]);
-            } catch (err) {
-              console.error(`Failed to extract topic ${i}:`, err);
-            }
-          }
-
-          setParsedContents(allExtracted);
-          setParsedReaderContents(allExtracted as Partial<BookReaderContent>[]);
-          setIsProcessing(false);
-          setSuccess(`Successfully extracted ${allExtracted.length} topics from "${book.title}"!`);
+          const details = await unifiedBookExtraction("", toc[i], book.file_path);
+          allExtracted.push(details);
+          setParsedContents([...allExtracted]);
         } catch (err) {
-          console.error(err);
-          setError('An error occurred while analyzing the book.');
-          setIsProcessing(false);
+          console.error(`Failed to extract topic ${i}:`, err);
         }
-      };
+      }
+
+      setParsedContents(allExtracted);
+      setParsedReaderContents(allExtracted as Partial<BookReaderContent>[]);
+      setIsProcessing(false);
+      setSuccess(`Successfully extracted ${allExtracted.length} topics from "${book.title}"!`);
     } catch (err) {
       console.error(err);
-      setError('Failed to retrieve book for analysis.');
+      setError(err instanceof Error ? err.message : 'An error occurred while analyzing the book.');
       setIsProcessing(false);
     }
   };

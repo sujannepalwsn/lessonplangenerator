@@ -68,7 +68,8 @@ export async function processSinglePDF(pdfLink: PDFLink, iterationId: string, us
 
     // 2. Metadata Extraction (Gemini primary)
     try {
-      const base64 = pdfBuffer.slice(0, 1024 * 1024).toString('base64');
+      // Limit size to avoid payload issues even internally if needed
+      const base64 = pdfBuffer.slice(0, 2 * 1024 * 1024).toString('base64');
       const geminiKey = userKeys?.gemini || process.env.GEMINI_API_KEY || "";
       const activeAI = new GoogleGenAI(geminiKey);
       const model = activeAI.getGenerativeModel({ model: "gemini-1.5-flash" });
