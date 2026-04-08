@@ -72,19 +72,23 @@ export async function processSinglePDF(pdfLink: PDFLink, iterationId: string, us
       const base64 = pdfBuffer.slice(0, 2 * 1024 * 1024).toString('base64');
       const geminiKey = userKeys?.gemini || process.env.GEMINI_API_KEY || "";
       const activeAI = new GoogleGenAI(geminiKey);
-      const model = activeAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
       const prompt = `Identify the Grade/Class, Subject, and a clean Title for this textbook.
       Filename: ${pdfLink.title}.pdf
       Return a JSON object with: { "title": string, "subject": string, "class": string }`;
 
-      const result = await model.generateContent([
-        { inlineData: { mimeType: "application/pdf", data: base64 } },
-        { text: prompt }
-      ]);
+      const result = await activeAI.models.generateContent({
+        model: "gemini-1.5-flash",
+        contents: [{
+          role: 'user',
+          parts: [
+            { inlineData: { mimeType: "application/pdf", data: base64 } },
+            { text: prompt }
+          ]
+        }]
+      });
 
-      const response = await result.response;
-      const extracted = JSON.parse(cleanJSON(response.text()));
+      const extracted = JSON.parse(cleanJSON(result.text || "{}"));
       metadata = { title: extracted.title, grade: extracted.class, subject: extracted.subject };
       agentType = 'gemini';
     } catch (geminiError: any) {
@@ -146,7 +150,7 @@ export async function processSinglePDF(pdfLink: PDFLink, iterationId: string, us
       console.log(`Generating initial lesson plan for: ${metadata.title}`);
       const geminiKey = userKeys?.gemini || process.env.GEMINI_API_KEY || "";
       const activeAI = new GoogleGenAI(geminiKey);
-      const model = activeAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
       const lpPrompt = `Generate a comprehensive lesson plan for the book: ${metadata.title} (Subject: ${metadata.subject}, Grade: ${metadata.grade}).
       Focus on the first introductory chapter.
       Return as a JSON object matching this schema:
@@ -162,9 +166,11 @@ export async function processSinglePDF(pdfLink: PDFLink, iterationId: string, us
         "home_assignment": string[]
       }`;
 
-      const lpResult = await model.generateContent(lpPrompt);
-      const lpResponse = await lpResult.response;
-      const lpData = JSON.parse(cleanJSON(lpResponse.text()));
+      const lpResult = await activeAI.models.generateContent({
+        model: "gemini-1.5-flash",
+        contents: [{ role: 'user', parts: [{ text: lpPrompt }] }]
+      });
+      const lpData = JSON.parse(cleanJSON(lpResult.text || "{}"));
 
       await supabase.from('lesson_plans').insert({
         ...lpData,

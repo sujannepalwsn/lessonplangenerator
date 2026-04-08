@@ -47,13 +47,20 @@ app.post('/api/chat', async (req, res) => {
     if (activePdfData) {
       const geminiKey = userKeys?.gemini || process.env.GEMINI_API_KEY || "";
       const activeAI = new GoogleGenAI(geminiKey);
-      const model = activeAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-      const result = await model.generateContent([
-        { inlineData: { mimeType: "application/pdf", data: activePdfData } },
-        { text: (system ? system + "\n\n" : "") + prompt }
-      ]);
-      const response = await result.response;
-      let text = response.text();
+
+      const result = await activeAI.models.generateContent({
+        model: "gemini-1.5-flash",
+        systemInstruction: system,
+        contents: [{
+          role: 'user',
+          parts: [
+            { inlineData: { mimeType: "application/pdf", data: activePdfData } },
+            { text: prompt }
+          ]
+        }]
+      });
+
+      let text = result.text || "";
       if (jsonMode) text = text.replace(/```json\n?|```/g, '').trim();
       return res.json({ response: text });
     }

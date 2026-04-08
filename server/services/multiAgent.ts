@@ -39,14 +39,14 @@ export async function callAgent(
 
 async function callGemini(prompt: string, system?: string, jsonMode?: boolean, customKey?: string): Promise<string> {
   const activeAI = customKey ? new GoogleGenAI(customKey) : genAI;
-  const model = activeAI.getGenerativeModel({
+
+  const result = await activeAI.models.generateContent({
     model: "gemini-1.5-flash",
-    systemInstruction: system
+    systemInstruction: system,
+    contents: [{ role: 'user', parts: [{ text: prompt }] }]
   });
 
-  const result = await model.generateContent(prompt);
-  const response = await result.response;
-  let text = response.text();
+  let text = result.text || "";
 
   if (jsonMode) {
      text = text.replace(/```json\n?|```/g, '').trim();

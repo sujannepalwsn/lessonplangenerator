@@ -21,7 +21,7 @@
       "destination": "/server/index.ts"
     },
     {
-      "source": "/((?!api|health|assets|favicon.ico).*)",
+      "source": "/((?!api|health|assets|favicon.ico|.*\\..*).*)",
       "destination": "/index.html"
     }
   ]

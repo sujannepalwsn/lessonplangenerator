@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Play, Loader2, CheckCircle2, XCircle, Clock, Search, ChevronRight, Layers, LayoutList } from 'lucide-react';
+import { Play, Loader2, CheckCircle2, XCircle, Clock, Search, ChevronRight, Layers, LayoutList, AlertCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
 
@@ -131,6 +131,7 @@ export function AutonomousDashboard() {
           <div className="flex-1">
             <div className="flex items-center gap-3">
               <h2 className="text-2xl font-bold text-slate-800">Autonomous Ingestion</h2>
+            <div className="bg-amber-100 text-amber-700 px-2 py-0.5 rounded text-[10px] font-bold uppercase">Beta</div>
               {isBackendConnected !== null && (
                 <div className={cn(
                   "px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-widest flex items-center gap-1",
@@ -143,6 +144,13 @@ export function AutonomousDashboard() {
             </div>
             <p className="text-slate-500 text-sm">Discover, Extract & Upload PDF books automatically.</p>
           </div>
+        </div>
+
+        <div className="mb-6 p-4 bg-blue-50 border border-blue-100 rounded-2xl flex items-start gap-3">
+           <AlertCircle className="w-5 h-5 text-blue-600 mt-0.5 shrink-0" />
+           <div className="text-sm text-blue-700">
+              <strong>Vercel Note:</strong> Serverless environments have short timeouts. Large ingestion tasks may time out. For the best experience, run the agent locally or use a persistent server.
+           </div>
         </div>
 
         <div className="flex flex-col md:flex-row gap-4">
