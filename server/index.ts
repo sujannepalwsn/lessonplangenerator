@@ -3,6 +3,8 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
 import { runAutonomousIngestion } from './services/orchestrator.js';
+import { callAgent, AgentType } from './services/multiAgent.js';
+import { GoogleGenAI } from "@google/genai";
 
 dotenv.config();
 
@@ -16,9 +18,37 @@ app.use(express.json());
 const supabaseUrl = process.env.SUPABASE_URL || 'https://placeholder.supabase.co';
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 'placeholder-key';
 export const supabase = createClient(supabaseUrl, supabaseKey);
+const genAI = new GoogleGenAI(process.env.GEMINI_API_KEY || "");
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok' });
+  res.json({
+    status: 'ok',
+    environment: process.env.NODE_ENV || 'development',
+    supabaseConnected: !!supabaseUrl && supabaseUrl !== 'https://placeholder.supabase.co'
+  });
+});
+
+app.post('/api/chat', async (req, res) => {
+  const { prompt, system, agent, jsonMode, pdfBase64 } = req.body;
+  try {
+    // If PDF is provided, we currently only support Gemini for multimodal
+    if (pdfBase64) {
+      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+      const result = await model.generateContent([
+        { inlineData: { mimeType: "application/pdf", data: pdfBase64 } },
+        { text: (system ? system + "\n\n" : "") + prompt }
+      ]);
+      const response = await result.response;
+      let text = response.text();
+      if (jsonMode) text = text.replace(/```json\n?|```/g, '').trim();
+      return res.json({ response: text });
+    }
+
+    const response = await callAgent(agent as AgentType, prompt, system, jsonMode);
+    res.json({ response });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // Basic structure for agent endpoints

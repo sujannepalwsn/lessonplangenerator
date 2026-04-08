@@ -4,6 +4,46 @@ import { LessonPlan, BookContent, BookReaderContent } from "../types";
 // Use import.meta.env for Vite/Vercel deployments, fallback to process.env for AI Studio environment
 const apiKey = import.meta.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || "";
 const ai = new GoogleGenAI({ apiKey });
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
+
+/**
+ * Helper function to call either Gemini directly (if gemini selected)
+ * or proxy through the backend for other agents.
+ */
+async function callAgentAPI(params: {
+  prompt: string,
+  system?: string,
+  agent?: string,
+  jsonMode?: boolean,
+  pdfBase64?: string
+}): Promise<any> {
+  const agent = params.agent || 'gemini';
+
+  // If it's gemini and we don't have a backend or want direct call
+  if (agent === 'gemini' && !params.pdfBase64) {
+    const model = ai.getGenerativeModel({
+      model: "gemini-1.5-flash",
+      systemInstruction: params.system
+    });
+    const result = await model.generateContent(params.prompt);
+    return result.response;
+  }
+
+  // Otherwise, call the backend proxy
+  const response = await fetch(`${BACKEND_URL}/api/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params)
+  });
+
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error || 'Failed to call agent');
+  }
+
+  const data = await response.json();
+  return { text: () => data.response };
+}
 
 /**
  * Helper function to call Gemini with retry logic for rate limits (429 errors)
@@ -13,6 +53,10 @@ async function callGeminiWithRetry(params: any, maxRetries = 3): Promise<any> {
   
   for (let i = 0; i < maxRetries; i++) {
     try {
+      // Compatibility with old calls
+      if (params.model?.includes('gemini-3')) {
+         params.model = 'gemini-1.5-pro';
+      }
       return await ai.models.generateContent(params);
     } catch (error: any) {
       lastError = error;
@@ -39,138 +83,95 @@ async function callGeminiWithRetry(params: any, maxRetries = 3): Promise<any> {
 }
 
 /**
- * Enhanced extraction for Lesson Plan Generator
- * Focuses on pedagogical structure and core concepts
+ * First step: Extract the Table of Contents from the PDF
  */
-export async function parseBookPDF(pdfBase64: string): Promise<Partial<BookContent>[]> {
-  const response = await callGeminiWithRetry({
-    model: "gemini-3-flash-preview",
-    contents: [
-      {
-        parts: [
-          {
-            inlineData: {
-              mimeType: "application/pdf",
-              data: pdfBase64,
-            },
-          },
-          {
-            text: `Analyze this textbook PDF for academic-grade lesson planning. 
-            
-            1. Detect the primary language. 
-            2. Decode legacy Nepali fonts (like Preeti) to UNICODE if necessary.
-            
-            Strictly extract the hierarchy: Unit -> Chapter -> Lesson -> Topic -> Sub-topic.
-            
-            For each topic/sub-topic, provide a HIGH-QUALITY, ACADEMIC-LEVEL extraction:
-            - content: A detailed, pedagogical summary of the content. Include core theories, key definitions, and critical explanations. This must be thorough enough for a university-level instructor to build a lesson.
-            - goals: Specific, measurable learning outcomes (Bloom's Taxonomy style).
+export async function extractTOC(pdfBase64: string): Promise<any[]> {
+  const response = await callAgentAPI({
+    agent: "gemini", // Extraction usually needs multimodal
+    pdfBase64: pdfBase64,
+    jsonMode: true,
+    prompt: `Extract the Table of Contents from this textbook PDF.
+            Identify every Unit, Chapter, and Lesson.
+            Include page numbers if available.
             
             Return a JSON array of objects with these keys:
-            - unit, chapter, lesson, topic, sub_topic, content, goals`,
-          },
-        ],
-      },
-    ],
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.ARRAY,
-        items: {
-          type: Type.OBJECT,
-          properties: {
-            unit: { type: Type.STRING },
-            chapter: { type: Type.STRING },
-            lesson: { type: Type.STRING },
-            topic: { type: Type.STRING },
-            sub_topic: { type: Type.STRING },
-            content: { type: Type.STRING },
-            goals: { type: Type.STRING }
-          },
-          required: ["unit", "lesson", "topic", "content", "goals"]
-        }
-      }
-    },
+            - unit, chapter, lesson, topic, page_number`
   });
 
   try {
-    return JSON.parse(response.text || "[]");
+    return JSON.parse(response.text() || "[]");
   } catch (e) {
-    console.error("Failed to parse Gemini response", e);
+    console.error("Failed to parse TOC response", e);
     return [];
   }
 }
 
 /**
- * High-fidelity extraction for the Book Reader
- * Focuses on capturing the full academic value of the text
+ * Unified extraction for both Lesson Planning and Reader
+ * Processes the book in chunks based on TOC to ensure no topic is missed.
  */
-export async function extractFullBookReaderContent(pdfBase64: string): Promise<Partial<BookReaderContent>[]> {
-  const response = await callGeminiWithRetry({
-    model: "gemini-3-flash-preview",
-    contents: [
-      {
-        parts: [
-          {
-            inlineData: {
-              mimeType: "application/pdf",
-              data: pdfBase64,
-            },
-          },
-          {
-            text: `Perform a high-fidelity academic extraction of this entire textbook PDF for a digital reader.
+export async function unifiedBookExtraction(pdfBase64: string, tocItem: any): Promise<Partial<BookContent>> {
+  const response = await callAgentAPI({
+    agent: "gemini",
+    pdfBase64: pdfBase64,
+    jsonMode: true,
+    prompt: `You are an expert academic analyzer. Extract detailed content for the following section from this textbook.
             
+            SECTION TO EXTRACT:
+            Unit: ${tocItem.unit}
+            Chapter: ${tocItem.chapter || 'N/A'}
+            Lesson/Topic: ${tocItem.topic}
+            Expected Page: ${tocItem.page_number || 'Unknown'}
+            
+            REQUIREMENTS:
             1. Detect language and ensure proper Unicode encoding.
-            2. Extract every Unit, Chapter, Lesson, and Topic.
+            2. Extract EVERYTHING related to this section. Do not summarize briefly.
+            3. full_content: Capture the entire detailed text, including all academic nuances and explanations.
+            4. content: A pedagogical summary for lesson planning.
+            5. goals: Specific learning outcomes.
+            6. key_points: Array of critical takeaways.
+            7. examples: Array of illustrative examples found in the text.
+            8. formulas: Array of mathematical or scientific formulas found in the text.
             
-            For each section, extract:
-            - full_content: The most detailed version of the text possible, capturing all nuances, detailed explanations, and high-level academic concepts. 
-            - key_points: A list of the most important takeaways.
-            - examples: Any illustrative examples or case studies provided in the text.
-            - formulas: Any mathematical or scientific formulas mentioned.
-            
-            Return a JSON array of objects with these keys:
-            - unit, chapter, lesson, topic, sub_topic, full_content, key_points, examples, formulas`,
-          },
-        ],
-      },
-    ],
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.ARRAY,
-        items: {
-          type: Type.OBJECT,
-          properties: {
-            unit: { type: Type.STRING },
-            chapter: { type: Type.STRING },
-            lesson: { type: Type.STRING },
-            topic: { type: Type.STRING },
-            sub_topic: { type: Type.STRING },
-            full_content: { type: Type.STRING },
-            key_points: { type: Type.ARRAY, items: { type: Type.STRING } },
-            examples: { type: Type.ARRAY, items: { type: Type.STRING } },
-            formulas: { type: Type.ARRAY, items: { type: Type.STRING } }
-          },
-          required: ["unit", "topic", "full_content", "key_points", "examples"]
-        }
-      }
-    },
+            Return a JSON object with these keys:
+            - unit, chapter, lesson, topic, sub_topic, content, full_content, goals, key_points, examples, formulas, page_number`
   });
 
   try {
-    console.log('Gemini Reader Extraction Response:', response.text);
-    return JSON.parse(response.text || "[]");
+    return JSON.parse(response.text() || "{}");
   } catch (e) {
-    console.error("Failed to parse Gemini response", e);
-    return [];
+    console.error("Failed to parse unified extraction response", e);
+    return { ...tocItem, content: "Failed to extract", full_content: "Failed to extract", goals: "N/A" };
   }
 }
 
+/**
+ * Compatibility wrappers for existing code
+ */
+export async function parseBookPDF(pdfBase64: string): Promise<Partial<BookContent>[]> {
+  // Legacy support - but we'll use the new unified method
+  const toc = await extractTOC(pdfBase64);
+  const results: Partial<BookContent>[] = [];
+
+  // Process every item from the TOC to ensure nothing is missed
+  for (const item of toc) {
+    const details = await unifiedBookExtraction(pdfBase64, item);
+    results.push(details);
+  }
+  return results;
+}
+
+export async function extractFullBookReaderContent(pdfBase64: string): Promise<Partial<BookReaderContent>[]> {
+  // Now returns the same unified data
+  return parseBookPDF(pdfBase64) as Promise<Partial<BookReaderContent>[]>;
+}
+
 export async function identifyBookMetadata(filename: string, pdfBase64?: string): Promise<{ title: string, subject: string, class: string }> {
-  const parts: any[] = [
-    {
-      text: `Identify the Grade/Class, Subject, and a clean Title for this textbook.
+  const response = await callAgentAPI({
+    agent: "gemini",
+    pdfBase64: pdfBase64,
+    jsonMode: true,
+    prompt: `Identify the Grade/Class, Subject, and a clean Title for this textbook.
       
       Filename: ${filename}
       
@@ -180,37 +181,10 @@ export async function identifyBookMetadata(filename: string, pdfBase64?: string)
       - class: The grade or class level (e.g., 10, 12, Grade 5)
       
       If you can't identify one, use "General" for class and "Unknown" for subject.`
-    }
-  ];
-
-  if (pdfBase64) {
-    parts.unshift({
-      inlineData: {
-        mimeType: "application/pdf",
-        data: pdfBase64,
-      },
-    });
-  }
-
-  const response = await callGeminiWithRetry({
-    model: "gemini-3-flash-preview",
-    contents: [{ parts }],
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          title: { type: Type.STRING },
-          subject: { type: Type.STRING },
-          class: { type: Type.STRING }
-        },
-        required: ["title", "subject", "class"]
-      }
-    },
   });
 
   try {
-    return JSON.parse(response.text || '{"title": "", "subject": "Unknown", "class": "General"}');
+    return JSON.parse(response.text() || '{"title": "", "subject": "Unknown", "class": "General"}');
   } catch (e) {
     console.error("Failed to parse metadata identification", e);
     return { title: filename, subject: "Unknown", class: "General" };
@@ -244,15 +218,14 @@ export async function answerQuestionFromBook(
   bookContents: BookContent[],
   subject: string,
   className: string,
-  targetLanguage: string = 'English'
+  targetLanguage: string = 'English',
+  agent: string = 'gemini'
 ): Promise<string> {
   const context = bookContents.map(c => `Unit: ${c.unit}, Topic: ${c.topic}, Content: ${c.content}`).join('\n\n');
   
-  const response = await callGeminiWithRetry({
-    model: "gemini-3-flash-preview",
-    contents: [
-      {
-        text: `You are an expert educational assistant. Answer the following question based on the provided textbook content.
+  const response = await callAgentAPI({
+    agent,
+    prompt: `You are an expert educational assistant. Answer the following question based on the provided textbook content.
         
         BOOK: ${bookTitle}
         SUBJECT: ${subject}
@@ -267,20 +240,17 @@ export async function answerQuestionFromBook(
         1. Answer the question accurately based ONLY on the provided content summaries.
         2. If the answer is not in the provided content, say "I'm sorry, but I couldn't find information about that in this specific book."
         3. Provide the answer in ${targetLanguage}.
-        4. Keep the answer clear, concise, and educational.`,
-      },
-    ],
+        4. Keep the answer clear, concise, and educational.`
   });
 
-  return response.text || "I'm sorry, I couldn't generate an answer.";
+  return response.text() || "I'm sorry, I couldn't generate an answer.";
 }
 
-export async function generatePlanFromContent(content: BookContent, subject: string, className: string, targetLanguage: string = 'English'): Promise<LessonPlan> {
-  const response = await callGeminiWithRetry({
-    model: "gemini-3-flash-preview",
-    contents: [
-      {
-        text: `Based on the following textbook content, generate a detailed lesson plan.
+export async function generatePlanFromContent(content: BookContent, subject: string, className: string, targetLanguage: string = 'English', agent: string = 'gemini'): Promise<LessonPlan> {
+  const response = await callAgentAPI({
+    agent,
+    jsonMode: true,
+    prompt: `Based on the following textbook content, generate a detailed lesson plan.
         IMPORTANT: Generate the entire lesson plan in ${targetLanguage}. 
         If the source content is in another language, translate the concepts accurately into ${targetLanguage}.
         
@@ -304,79 +274,12 @@ export async function generatePlanFromContent(content: BookContent, subject: str
         - Remarks (any additional teacher notes)
         - Principal Remarks (leave empty or generic)
 
-        Return as a JSON object matching this schema:
-        {
-          "subject": string,
-          "class": string,
-          "chapter": string,
-          "unit": string,
-          "period": string,
-          "lesson_topic": string,
-          "objectives": string,
-          "learning_outcomes": string,
-          "warm_up_review": string,
-          "teaching_activities": string[],
-          "learning_activities": string[],
-          "evaluation": string[],
-          "evaluation_activities": string[],
-          "class_work": string[],
-          "home_assignment": string[],
-          "remarks": string,
-          "principal_remarks": string
-        }`,
-      },
-    ],
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          subject: { type: Type.STRING },
-          class: { type: Type.STRING },
-          chapter: { type: Type.STRING },
-          unit: { type: Type.STRING },
-          period: { type: Type.STRING },
-          lesson_topic: { type: Type.STRING },
-          objectives: { type: Type.STRING },
-          learning_outcomes: { type: Type.STRING },
-          warm_up_review: { type: Type.STRING },
-          teaching_activities: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING }
-          },
-          learning_activities: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING }
-          },
-          evaluation: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING }
-          },
-          evaluation_activities: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING }
-          },
-          class_work: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING }
-          },
-          home_assignment: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING }
-          },
-          remarks: { type: Type.STRING },
-          principal_remarks: { type: Type.STRING }
-        },
-        required: [
-          "subject", "class", "lesson_topic", "objectives", "warm_up_review", 
-          "teaching_activities", "evaluation", "class_work", "home_assignment"
-        ]
-      }
-    },
+        Return as a JSON object with these keys:
+        subject, class, chapter, unit, period, lesson_topic, objectives, learning_outcomes, warm_up_review, teaching_activities, learning_activities, evaluation, evaluation_activities, class_work, home_assignment, remarks, principal_remarks`
   });
 
   try {
-    const plan = JSON.parse(response.text || "{}");
+    const plan = JSON.parse(response.text() || "{}");
     return { 
       ...plan, 
       book_content_id: content.id,
@@ -389,20 +292,12 @@ export async function generatePlanFromContent(content: BookContent, subject: str
   }
 }
 
-export async function generatePlanFromPDFAndTopic(pdfBase64: string, content: BookContent, subject: string, className: string, targetLanguage: string = 'English'): Promise<LessonPlan> {
-  const response = await callGeminiWithRetry({
-    model: "gemini-3-flash-preview",
-    contents: [
-      {
-        parts: [
-          {
-            inlineData: {
-              mimeType: "application/pdf",
-              data: pdfBase64,
-            },
-          },
-          {
-            text: `Study the provided textbook PDF and generate a detailed lesson plan for the specific topic below.
+export async function generatePlanFromPDFAndTopic(pdfBase64: string, content: BookContent, subject: string, className: string, targetLanguage: string = 'English', agent: string = 'gemini'): Promise<LessonPlan> {
+  const response = await callAgentAPI({
+    agent,
+    pdfBase64,
+    jsonMode: true,
+    prompt: `Study the provided textbook PDF and generate a detailed lesson plan for the specific topic below.
             IMPORTANT: Generate the entire lesson plan in ${targetLanguage}. 
             
             SUBJECT: ${subject}
@@ -417,92 +312,12 @@ export async function generatePlanFromPDFAndTopic(pdfBase64: string, content: Bo
             2. Use the actual text, examples, and exercises from the PDF to create a high-quality lesson plan.
             3. If this is a Mathematics book, include specific practice problems and step-by-step solutions from the text.
             
-            Generate a lesson plan with:
-            - Period (40-45 mins)
-            - Objectives (Learning Outcomes)
-            - Warm up & Review
-            - Teaching Activities (at least 5 steps)
-            - Evaluation (at least 5 items)
-            - Class Work (list of tasks)
-            - Home Assignment (list of tasks)
-            - Remarks (any additional teacher notes)
-            - Principal Remarks (leave empty or generic)
-
-            Return as a JSON object matching this schema:
-            {
-              "subject": string,
-              "class": string,
-              "chapter": string,
-              "unit": string,
-              "period": string,
-              "lesson_topic": string,
-              "objectives": string,
-              "learning_outcomes": string,
-              "warm_up_review": string,
-              "teaching_activities": string[],
-              "learning_activities": string[],
-              "evaluation": string[],
-              "evaluation_activities": string[],
-              "class_work": string[],
-              "home_assignment": string[],
-              "remarks": string,
-              "principal_remarks": string
-            }`,
-          },
-        ],
-      },
-    ],
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          subject: { type: Type.STRING },
-          class: { type: Type.STRING },
-          chapter: { type: Type.STRING },
-          unit: { type: Type.STRING },
-          period: { type: Type.STRING },
-          lesson_topic: { type: Type.STRING },
-          objectives: { type: Type.STRING },
-          learning_outcomes: { type: Type.STRING },
-          warm_up_review: { type: Type.STRING },
-          teaching_activities: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING }
-          },
-          learning_activities: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING }
-          },
-          evaluation: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING }
-          },
-          evaluation_activities: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING }
-          },
-          class_work: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING }
-          },
-          home_assignment: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING }
-          },
-          remarks: { type: Type.STRING },
-          principal_remarks: { type: Type.STRING }
-        },
-        required: [
-          "subject", "class", "lesson_topic", "objectives", "warm_up_review", 
-          "teaching_activities", "evaluation", "class_work", "home_assignment"
-        ]
-      }
-    },
+            Generate a lesson plan as a JSON object with these keys:
+            subject, class, chapter, unit, period, lesson_topic, objectives, learning_outcomes, warm_up_review, teaching_activities, learning_activities, evaluation, evaluation_activities, class_work, home_assignment, remarks, principal_remarks`
   });
 
   try {
-    const plan = JSON.parse(response.text || "{}");
+    const plan = JSON.parse(response.text() || "{}");
     return { 
       ...plan, 
       book_content_id: content.id,
@@ -512,6 +327,34 @@ export async function generatePlanFromPDFAndTopic(pdfBase64: string, content: Bo
   } catch (e) {
     console.error("Failed to parse Gemini response", e);
     throw new Error("Failed to generate lesson plan from PDF");
+  }
+}
+
+export async function generateMCQs(content: BookContent, count: number = 5, agent: string = 'gemini'): Promise<any[]> {
+  const response = await callAgentAPI({
+    agent,
+    jsonMode: true,
+    prompt: `Based on the following textbook content, generate ${count} high-quality Multiple Choice Questions (MCQs).
+
+        TOPIC: ${content.topic}
+        CONTENT: ${content.content}
+        FULL TEXT: ${content.full_content || ''}
+
+        For each MCQ:
+        1. Provide a clear question.
+        2. Provide 4 distinct options (A, B, C, D).
+        3. Identify the correct answer.
+        4. Assign a difficulty (easy, medium, hard).
+
+        Return a JSON array of objects with these keys:
+        question_text, options, correct_answer, difficulty`
+  });
+
+  try {
+    return JSON.parse(response.text() || "[]");
+  } catch (e) {
+    console.error("Failed to parse MCQs", e);
+    return [];
   }
 }
 

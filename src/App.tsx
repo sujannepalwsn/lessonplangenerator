@@ -7,8 +7,10 @@ import React, { useState, useEffect } from 'react';
 import { Routes, Route, Link, NavLink, useNavigate, useLocation, Navigate } from 'react-router-dom';
 import { Upload, FileText, Loader2, Save, CheckCircle2, AlertCircle, ChevronDown, ChevronUp, Printer, BookOpen, Sparkles, List, GraduationCap, Book as BookIcon, Folder, RefreshCw, Trash2, Eye, Copy, Search, X, Menu, Link as LinkIcon, ChevronLeft, ChevronRight, Layers, Activity } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { parseBookPDF, generatePlanFromContent, generatePlanFromPDFAndTopic, answerQuestionFromBook, searchBookContents, extractFullBookReaderContent, identifyBookMetadata } from './services/geminiService';
+import { parseBookPDF, generatePlanFromContent, generatePlanFromPDFAndTopic, answerQuestionFromBook, searchBookContents, extractFullBookReaderContent, identifyBookMetadata, extractTOC, unifiedBookExtraction } from './services/geminiService';
 import { AutonomousDashboard } from './components/AutonomousDashboard';
+import { ExamGenerator } from './components/ExamGenerator';
+import { MCQGenerator } from './components/MCQGenerator';
 import { getSupabase } from './lib/supabase';
 import { LessonPlan, Book, BookContent, BookReaderContent } from './types';
 import { cn } from './lib/utils';
@@ -51,6 +53,7 @@ export default function App() {
   const [selectedBook, setSelectedBook] = useState<Book | null>(null);
   const [selectedTopic, setSelectedTopic] = useState<BookContent | null>(null);
   const [targetLanguage, setTargetLanguage] = useState<string>('English');
+  const [selectedAgent, setSelectedAgent] = useState<string>('gemini');
   const [viewingPdfUrl, setViewingPdfUrl] = useState<string | null>(null);
   const [viewingPlan, setViewingPlan] = useState<LessonPlan | null>(null);
   const [generatedTopicIds, setGeneratedTopicIds] = useState<Set<string>>(new Set());
@@ -172,7 +175,7 @@ export default function App() {
       const supabase = getSupabase();
       const { data: topics, error: topicsError } = await supabase
         .from('book_contents')
-        .select('id, book_id, unit, chapter, lesson, topic, sub_topic, content, goals, created_at')
+        .select('*')
         .eq('book_id', bookId)
         .order('created_at', { ascending: true });
       
@@ -181,21 +184,7 @@ export default function App() {
         throw topicsError;
       }
       setAvailableTopics(topics || []);
-
-      // Fetch reader contents
-      const { data: readerContents, error: readerError } = await supabase
-        .from('book_reader_contents')
-        .select('*')
-        .eq('book_id', bookId)
-        .order('created_at', { ascending: true });
-      
-      if (readerError) {
-        console.warn('Error fetching book_reader_contents (Table might not exist yet):', readerError);
-        setAvailableReaderContents([]);
-      } else {
-        console.log(`Fetched ${readerContents?.length || 0} reader sections for book ${bookId}`);
-        setAvailableReaderContents(readerContents || []);
-      }
+      setAvailableReaderContents(topics || []); // Use the same data for reader
 
       if (topics && topics.length > 0) {
         const topicIds = topics.map(t => t.id);
@@ -589,16 +578,29 @@ export default function App() {
         try {
           const base64 = (reader.result as string).split(',')[1];
           
-          // Run both extractions in parallel
-          const [contents, readerContents] = await Promise.all([
-            parseBookPDF(base64),
-            extractFullBookReaderContent(base64)
-          ]);
+          // 3. New TOC-First Unified Extraction
+          const toc = await extractTOC(base64);
+          setBulkTotal(toc.length);
+          setBulkProgress(0);
 
-          setParsedContents(contents);
-          setParsedReaderContents(readerContents);
+          const allExtracted: Partial<BookContent>[] = [];
+
+          for (let i = 0; i < toc.length; i++) {
+            setBulkProgress(i + 1);
+            try {
+              const details = await unifiedBookExtraction(base64, toc[i]);
+              allExtracted.push(details);
+              // Update state incrementally so user sees progress
+              setParsedContents([...allExtracted]);
+            } catch (err) {
+              console.error(`Failed to extract topic ${i}:`, err);
+            }
+          }
+
+          setParsedContents(allExtracted);
+          setParsedReaderContents(allExtracted as Partial<BookReaderContent>[]);
           setIsProcessing(false);
-          setSuccess(`Successfully extracted ${contents.length} topics and ${readerContents.length} reader sections from "${book.title}"!`);
+          setSuccess(`Successfully extracted ${allExtracted.length} topics from "${book.title}"!`);
         } catch (err) {
           console.error(err);
           setError('An error occurred while analyzing the book.');
@@ -637,15 +639,9 @@ export default function App() {
 
       // 3. Delete existing contents for this book
       await supabase.from('book_contents').delete().eq('book_id', bookId);
-      await supabase.from('book_reader_contents').delete().eq('book_id', bookId);
       
-      // 4. Save new contents
+      // 4. Save new unified contents
       const contentsToSave = parsedContents.map(c => ({
-        ...c,
-        book_id: bookId
-      }));
-
-      const readerContentsToSave = parsedReaderContents.map(c => ({
         ...c,
         book_id: bookId
       }));
@@ -653,12 +649,7 @@ export default function App() {
       const { error: contentsError } = await supabase.from('book_contents').insert(contentsToSave);
       if (contentsError) throw contentsError;
 
-      if (readerContentsToSave.length > 0) {
-        const { error: readerError } = await supabase.from('book_reader_contents').insert(readerContentsToSave);
-        if (readerError) throw readerError;
-      }
-
-      setSuccess(`Successfully saved ${parsedContents.length} topics and ${parsedReaderContents.length} reader sections to "${bookToAnalyze.title}"!`);
+      setSuccess(`Successfully saved ${parsedContents.length} topics to "${bookToAnalyze.title}"!`);
       setParsedContents([]);
       setParsedReaderContents([]);
       setBookToAnalyze(null);
@@ -782,9 +773,9 @@ export default function App() {
         let plan: LessonPlan;
         try {
           if (pdfBase64) {
-            plan = await generatePlanFromPDFAndTopic(pdfBase64, topic, selectedSubject, selectedGrade, targetLanguage);
+            plan = await generatePlanFromPDFAndTopic(pdfBase64, topic, selectedSubject, selectedGrade, targetLanguage, selectedAgent);
           } else {
-            plan = await generatePlanFromContent(topic, selectedSubject, selectedGrade, targetLanguage);
+            plan = await generatePlanFromContent(topic, selectedSubject, selectedGrade, targetLanguage, selectedAgent);
           }
 
           const planWithMetadata = {
@@ -905,9 +896,9 @@ export default function App() {
           reader.readAsDataURL(pdfBlob);
         });
 
-        plan = await generatePlanFromPDFAndTopic(pdfBase64, content, selectedSubject, selectedGrade, targetLanguage);
+        plan = await generatePlanFromPDFAndTopic(pdfBase64, content, selectedSubject, selectedGrade, targetLanguage, selectedAgent);
       } else {
-        plan = await generatePlanFromContent(content, selectedSubject, selectedGrade, targetLanguage);
+        plan = await generatePlanFromContent(content, selectedSubject, selectedGrade, targetLanguage, selectedAgent);
       }
       
       // Add metadata for the external system integration
@@ -1002,7 +993,8 @@ export default function App() {
         contextToUse,
         selectedSubject,
         selectedGrade,
-        targetLanguage
+        targetLanguage,
+        selectedAgent
       );
       
       setQaAnswer(answer);
@@ -1150,8 +1142,23 @@ export default function App() {
             <NavLink to="/reader" className={({isActive}) => cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", isActive ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Reader</NavLink>
             <NavLink to="/qa" className={({isActive}) => cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", isActive ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Q&A</NavLink>
             <NavLink to="/autonomous" className={({isActive}) => cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", isActive ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Autonomous</NavLink>
+            <NavLink to="/exams" className={({isActive}) => cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", isActive ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Exams</NavLink>
             <NavLink to="/lesson-plans" className={({isActive}) => cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", isActive ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Lesson Plans</NavLink>
           </nav>
+
+          <div className="hidden lg:flex items-center gap-2 ml-4">
+            <span className="text-[10px] font-bold text-slate-400 uppercase">Agent:</span>
+            <select
+              value={selectedAgent}
+              onChange={(e) => setSelectedAgent(e.target.value)}
+              className="text-xs font-bold bg-slate-100 border-none rounded-lg px-2 py-1 outline-none text-indigo-600"
+            >
+              <option value="gemini">Gemini (Auto)</option>
+              <option value="groq">Groq (Llama 3)</option>
+              <option value="huggingface">HuggingFace</option>
+              <option value="ollama">Local Ollama</option>
+            </select>
+          </div>
 
           {/* Mobile Menu Button */}
           <button 
@@ -1213,6 +1220,13 @@ export default function App() {
                   className={({isActive}) => cn("px-4 py-3 rounded-xl text-sm font-bold transition-all flex items-center gap-3", isActive ? "bg-indigo-50 text-indigo-600" : "text-slate-500 hover:bg-slate-50")}
                 >
                   <Activity className="w-5 h-5" /> Autonomous
+                </NavLink>
+                <NavLink
+                  to="/exams"
+                  onClick={() => setIsMenuOpen(false)}
+                  className={({isActive}) => cn("px-4 py-3 rounded-xl text-sm font-bold transition-all flex items-center gap-3", isActive ? "bg-indigo-50 text-indigo-600" : "text-slate-500 hover:bg-slate-50")}
+                >
+                  <FileText className="w-5 h-5" /> Exams
                 </NavLink>
                 <NavLink 
                   to="/lesson-plans" 
@@ -2090,6 +2104,10 @@ Example: https://site.com/book.pdf | 10 | Science | Physics Part 1"
                                 <p className="text-emerald-800 text-sm italic">{(topic as any).goals}</p>
                               </div>
                             )}
+
+                            <div className="pt-8 border-t border-slate-100">
+                               <MCQGenerator content={topic as BookContent} agent={selectedAgent} />
+                            </div>
                           </div>
                         </motion.div>
                       );
@@ -2313,6 +2331,7 @@ Example: https://site.com/book.pdf | 10 | Science | Physics Part 1"
           } />
 
           <Route path="/autonomous" element={<AutonomousDashboard />} />
+          <Route path="/exams" element={<ExamGenerator agent={selectedAgent} />} />
           <Route path="/lesson-plans" element={
             <div className="space-y-6">
               <div className="bg-white rounded-2xl border border-slate-200 p-8 shadow-sm">
