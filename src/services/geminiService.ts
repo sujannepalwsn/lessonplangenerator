@@ -23,7 +23,8 @@ async function callAgentAPI(params: {
   system?: string,
   agent?: string,
   jsonMode?: boolean,
-  pdfBase64?: string
+  pdfBase64?: string,
+  pdfPath?: string
 }): Promise<any> {
   const agent = params.agent || 'gemini';
 
@@ -31,8 +32,8 @@ async function callAgentAPI(params: {
   const savedKeysRaw = localStorage.getItem('ai_api_keys');
   const userKeys = savedKeysRaw ? JSON.parse(savedKeysRaw) : {};
 
-  // If it's gemini and we have a user key, or it's standard call without PDF
-  if (agent === 'gemini' && !params.pdfBase64) {
+  // If it's gemini and we have a user key, or it's standard call without PDF/Path
+  if (agent === 'gemini' && !params.pdfBase64 && !params.pdfPath) {
     const geminiKey = userKeys.gemini || apiKey;
     const userAI = new GoogleGenAI(geminiKey);
     const model = userAI.getGenerativeModel({
@@ -117,10 +118,11 @@ async function callGeminiWithRetry(params: any, maxRetries = 3): Promise<any> {
 /**
  * First step: Extract the Table of Contents from the PDF
  */
-export async function extractTOC(pdfBase64: string): Promise<any[]> {
+export async function extractTOC(pdfBase64?: string, pdfPath?: string): Promise<any[]> {
   const response = await callAgentAPI({
     agent: "gemini", // Extraction usually needs multimodal
     pdfBase64: pdfBase64,
+    pdfPath: pdfPath,
     jsonMode: true,
     prompt: `Extract the Table of Contents from this textbook PDF.
             Identify every Unit, Chapter, and Lesson.
@@ -142,10 +144,11 @@ export async function extractTOC(pdfBase64: string): Promise<any[]> {
  * Unified extraction for both Lesson Planning and Reader
  * Processes the book in chunks based on TOC to ensure no topic is missed.
  */
-export async function unifiedBookExtraction(pdfBase64: string, tocItem: any): Promise<Partial<BookContent>> {
+export async function unifiedBookExtraction(pdfBase64?: string, tocItem?: any, pdfPath?: string): Promise<Partial<BookContent>> {
   const response = await callAgentAPI({
     agent: "gemini",
     pdfBase64: pdfBase64,
+    pdfPath: pdfPath,
     jsonMode: true,
     prompt: `You are an expert academic analyzer. Extract detailed content for the following section from this textbook.
             
@@ -180,28 +183,29 @@ export async function unifiedBookExtraction(pdfBase64: string, tocItem: any): Pr
 /**
  * Compatibility wrappers for existing code
  */
-export async function parseBookPDF(pdfBase64: string): Promise<Partial<BookContent>[]> {
+export async function parseBookPDF(pdfBase64?: string, pdfPath?: string): Promise<Partial<BookContent>[]> {
   // Legacy support - but we'll use the new unified method
-  const toc = await extractTOC(pdfBase64);
+  const toc = await extractTOC(pdfBase64, pdfPath);
   const results: Partial<BookContent>[] = [];
 
   // Process every item from the TOC to ensure nothing is missed
   for (const item of toc) {
-    const details = await unifiedBookExtraction(pdfBase64, item);
+    const details = await unifiedBookExtraction(pdfBase64, item, pdfPath);
     results.push(details);
   }
   return results;
 }
 
-export async function extractFullBookReaderContent(pdfBase64: string): Promise<Partial<BookReaderContent>[]> {
+export async function extractFullBookReaderContent(pdfBase64?: string, pdfPath?: string): Promise<Partial<BookReaderContent>[]> {
   // Now returns the same unified data
-  return parseBookPDF(pdfBase64) as Promise<Partial<BookReaderContent>[]>;
+  return parseBookPDF(pdfBase64, pdfPath) as Promise<Partial<BookReaderContent>[]>;
 }
 
-export async function identifyBookMetadata(filename: string, pdfBase64?: string): Promise<{ title: string, subject: string, class: string }> {
+export async function identifyBookMetadata(filename: string, pdfBase64?: string, pdfPath?: string): Promise<{ title: string, subject: string, class: string }> {
   const response = await callAgentAPI({
     agent: "gemini",
     pdfBase64: pdfBase64,
+    pdfPath: pdfPath,
     jsonMode: true,
     prompt: `Identify the Grade/Class, Subject, and a clean Title for this textbook.
       
@@ -324,10 +328,11 @@ export async function generatePlanFromContent(content: BookContent, subject: str
   }
 }
 
-export async function generatePlanFromPDFAndTopic(pdfBase64: string, content: BookContent, subject: string, className: string, targetLanguage: string = 'English', agent: string = 'gemini'): Promise<LessonPlan> {
+export async function generatePlanFromPDFAndTopic(pdfBase64?: string, content?: BookContent, subject?: string, className?: string, targetLanguage: string = 'English', agent: string = 'gemini', pdfPath?: string): Promise<LessonPlan> {
   const response = await callAgentAPI({
     agent,
     pdfBase64,
+    pdfPath,
     jsonMode: true,
     prompt: `Study the provided textbook PDF and generate a detailed lesson plan for the specific topic below.
             IMPORTANT: Generate the entire lesson plan in ${targetLanguage}. 
