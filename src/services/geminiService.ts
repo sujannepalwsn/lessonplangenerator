@@ -82,7 +82,7 @@ async function callAgentAPI(params: {
  */
 async function callGeminiWithRetry(params: any, maxRetries = 3): Promise<any> {
   let lastError: any;
-  
+
   for (let i = 0; i < maxRetries; i++) {
     try {
       // Compatibility with old calls
@@ -92,13 +92,13 @@ async function callGeminiWithRetry(params: any, maxRetries = 3): Promise<any> {
       return await ai.models.generateContent(params);
     } catch (error: any) {
       lastError = error;
-      
+
       // Check if it's a rate limit error (429)
-      const isRateLimit = error?.status === "RESOURCE_EXHAUSTED" || 
-                          error?.message?.includes("429") || 
+      const isRateLimit = error?.status === "RESOURCE_EXHAUSTED" ||
+                          error?.message?.includes("429") ||
                           error?.message?.includes("quota") ||
                           error?.message?.includes("RESOURCE_EXHAUSTED");
-      
+
       if (isRateLimit && i < maxRetries - 1) {
         // Exponential backoff: 2s, 4s, 8s...
         const delay = Math.pow(2, i + 1) * 1000;
@@ -106,11 +106,11 @@ async function callGeminiWithRetry(params: any, maxRetries = 3): Promise<any> {
         await new Promise(resolve => setTimeout(resolve, delay));
         continue;
       }
-      
+
       throw error;
     }
   }
-  
+
   throw lastError;
 }
 
@@ -403,7 +403,7 @@ export async function generateLessonPlansFromPDF(pdfBase64: string): Promise<Les
             },
           },
           {
-            text: `Analyze this textbook PDF and identify all distinct lessons or chapters. 
+            text: `Analyze this textbook PDF and identify all distinct lessons or chapters.
             For each lesson, generate a detailed lesson plan following this specific structure:
             - Subject
             - Class
@@ -473,8 +473,8 @@ export async function generateLessonPlansFromPDF(pdfBase64: string): Promise<Les
             remarks: { type: Type.STRING }
           },
           required: [
-            "subject", "class", "unit", "period", "lesson_topic", 
-            "learning_outcomes", "warm_up_review", "teaching_activities", 
+            "subject", "class", "unit", "period", "lesson_topic",
+            "learning_outcomes", "warm_up_review", "teaching_activities",
             "evaluation", "class_work", "home_assignment"
           ]
         }

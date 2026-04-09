@@ -6,7 +6,7 @@ const geminiApiKey = process.env.GEMINI_API_KEY || "";
 const groqApiKey = process.env.GROQ_API_KEY || "";
 const huggingFaceToken = process.env.HF_TOKEN || "";
 
-const genAI = new GoogleGenAI(geminiApiKey);
+const genAI = new GoogleGenAI({ apiKey: geminiApiKey });
 const groq = groqApiKey ? new Groq({ apiKey: groqApiKey }) : null;
 
 export type AgentType = 'gemini' | 'groq' | 'huggingface' | 'ollama';
@@ -38,15 +38,15 @@ export async function callAgent(
 }
 
 async function callGemini(prompt: string, system?: string, jsonMode?: boolean, customKey?: string): Promise<string> {
-  const activeAI = customKey ? new GoogleGenAI(customKey) : genAI;
-  const model = activeAI.getGenerativeModel({
+  const activeAI = customKey ? new GoogleGenAI({ apiKey: customKey }) : genAI;
+
+  const result = await activeAI.models.generateContent({
     model: "gemini-1.5-flash",
-    systemInstruction: system
+    systemInstruction: system,
+    contents: [{ role: 'user', parts: [{ text: prompt }] }]
   });
 
-  const result = await model.generateContent(prompt);
-  const response = await result.response;
-  let text = response.text();
+  let text = result.text || "";
 
   if (jsonMode) {
      text = text.replace(/```json\n?|```/g, '').trim();

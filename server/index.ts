@@ -18,7 +18,7 @@ app.use(express.json());
 const supabaseUrl = process.env.SUPABASE_URL || 'https://placeholder.supabase.co';
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 'placeholder-key';
 export const supabase = createClient(supabaseUrl, supabaseKey);
-const genAI = new GoogleGenAI(process.env.GEMINI_API_KEY || "");
+const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 
 app.get('/health', (req, res) => {
   res.json({
@@ -29,19 +29,37 @@ app.get('/health', (req, res) => {
 });
 
 app.post('/api/chat', async (req, res) => {
-  const { prompt, system, agent, jsonMode, pdfBase64, userKeys } = req.body;
+  const { prompt, system, agent, jsonMode, pdfBase64, pdfPath, userKeys } = req.body;
   try {
+    let activePdfData = pdfBase64;
+
+    // If a pdfPath is provided, download it from Supabase
+    if (pdfPath && !activePdfData) {
+       const { data, error } = await supabase.storage.from('books').download(pdfPath);
+       if (!error && data) {
+          const buffer = await data.arrayBuffer();
+          activePdfData = Buffer.from(buffer).toString('base64');
+       }
+    }
+
     // If PDF is provided, we currently only support Gemini for multimodal
-    if (pdfBase64) {
+    if (activePdfData) {
       const geminiKey = userKeys?.gemini || process.env.GEMINI_API_KEY || "";
-      const activeAI = new GoogleGenAI(geminiKey);
-      const model = activeAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-      const result = await model.generateContent([
-        { inlineData: { mimeType: "application/pdf", data: pdfBase64 } },
-        { text: (system ? system + "\n\n" : "") + prompt }
-      ]);
-      const response = await result.response;
-      let text = response.text();
+      const activeAI = new GoogleGenAI({ apiKey: geminiKey });
+
+      const result = await activeAI.models.generateContent({
+        model: "gemini-1.5-flash",
+        systemInstruction: system,
+        contents: [{
+          role: 'user',
+          parts: [
+            { inlineData: { mimeType: "application/pdf", data: activePdfData } },
+            { text: prompt }
+          ]
+        }]
+      });
+
+      let text = result.text || "";
       if (jsonMode) text = text.replace(/```json\n?|```/g, '').trim();
       return res.json({ response: text });
     }

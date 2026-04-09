@@ -598,7 +598,7 @@ export default function App() {
       reader.onload = async () => {
         try {
           const base64 = (reader.result as string).split(',')[1];
-          
+
           // 3. New TOC-First Unified Extraction
           const toc = await extractTOC(base64);
           setBulkTotal(toc.length);
@@ -815,7 +815,7 @@ export default function App() {
         const { data: pdfBlob, error: downloadError } = await supabase.storage
           .from('books')
           .download(selectedBook.file_path);
-        
+
         if (!downloadError) {
           const reader = new FileReader();
           pdfBase64 = await new Promise<string>((resolve, reject) => {
@@ -953,7 +953,7 @@ export default function App() {
         const { data: pdfBlob, error: downloadError } = await supabase.storage
           .from('books')
           .download(selectedBook.file_path);
-        
+
         if (downloadError) throw downloadError;
 
         const reader = new FileReader();
