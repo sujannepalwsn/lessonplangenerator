@@ -94,11 +94,17 @@ export default function App() {
   const checkBackendHealth = async () => {
     try {
       const savedKeysRaw = localStorage.getItem('ai_api_keys');
-      let url = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
+      let url = import.meta.env.VITE_BACKEND_URL;
+
       if (savedKeysRaw) {
         const keys = JSON.parse(savedKeysRaw);
         if (keys.backend_url) url = keys.backend_url;
       }
+
+      if (!url) {
+        url = import.meta.env.PROD ? window.location.origin : 'http://localhost:3001';
+      }
+
       const response = await fetch(`${url}/health`).catch(() => null);
       setIsBackendOnline(!!response?.ok);
     } catch {

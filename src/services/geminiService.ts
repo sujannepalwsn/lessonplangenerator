@@ -11,7 +11,16 @@ function getBackendUrl() {
     const keys = JSON.parse(savedKeysRaw);
     if (keys.backend_url) return keys.backend_url;
   }
-  return import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
+
+  // If we have an environment variable, use it.
+  if (import.meta.env.VITE_BACKEND_URL) return import.meta.env.VITE_BACKEND_URL;
+
+  // If we're in production (Vercel), use the current origin.
+  // The vercel.json rewrites will handle routing /api and /health to the server.
+  if (import.meta.env.PROD) return window.location.origin;
+
+  // Default for local development
+  return 'http://localhost:3001';
 }
 
 /**
@@ -397,7 +406,7 @@ export async function generateMCQs(content: BookContent, count: number = 5, agen
 
 export async function generateLessonPlansFromPDF(pdfBase64: string): Promise<LessonPlan[]> {
   const response = await callGeminiWithRetry({
-    model: "gemini-3-flash-preview",
+    model: "gemini-1.5-flash",
     contents: [
       {
         parts: [
