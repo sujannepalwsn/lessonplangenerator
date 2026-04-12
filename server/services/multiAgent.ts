@@ -1,4 +1,4 @@
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI } from "@google/generative-ai";
 import Groq from "groq-sdk";
 import axios from 'axios';
 
@@ -38,16 +38,16 @@ export async function callAgent(
 }
 
 async function callGemini(prompt: string, system?: string, jsonMode?: boolean, customKey?: string): Promise<string> {
-  const activeAI = customKey ? new GoogleGenAI({ apiKey: customKey }) : genAI;
+  const activeAI = customKey ? new GoogleGenAI(customKey) : genAI;
+  const model = activeAI.getGenerativeModel({
+    model: "gemini-1.5-flash",
+    systemInstruction: system
+  });
 
   try {
-    const result = await activeAI.models.generateContent({
-      model: "gemini-1.5-flash",
-      systemInstruction: system,
-      contents: [{ role: 'user', parts: [{ text: prompt }] }]
-    });
-
-    let text = result.text || "";
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    let text = response.text();
 
     if (jsonMode) {
       // Robust JSON extraction

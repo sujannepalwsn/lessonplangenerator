@@ -4,8 +4,7 @@ import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
 import { runAutonomousIngestion } from './services/orchestrator.js';
 import { callAgent, AgentType } from './services/multiAgent.js';
-import { GoogleGenAI } from "@google/genai";
-import pdf from 'pdf-parse';
+import { GoogleGenAI } from "@google/generative-ai";
 
 dotenv.config();
 
@@ -32,31 +31,36 @@ app.get('/health', (req, res) => {
 app.post('/api/chat', async (req, res) => {
   const { prompt, system, agent, jsonMode, pdfBase64, pdfPath, pdfPaths, userKeys } = req.body;
   try {
-    let textContext = "";
-
-    // Handle multiple PDF paths (for Exam Generator)
     const activePaths = pdfPaths || (pdfPath ? [pdfPath] : []);
 
-    if (activePaths.length > 0) {
-      for (const path of activePaths) {
-        const { data, error } = await supabase.storage.from('books').download(path);
-        if (!error && data) {
-          const buffer = Buffer.from(await data.arrayBuffer());
-          const pdfData = await pdf(buffer);
-          textContext += `\n--- SOURCE: ${path} ---\n${pdfData.text}\n`;
+    if (activePaths.length > 0 || pdfBase64) {
+      const geminiKey = userKeys?.gemini || process.env.GEMINI_API_KEY || "";
+      const activeAI = new GoogleGenAI(geminiKey);
+      const model = activeAI.getGenerativeModel({ model: "gemini-1.5-flash", systemInstruction: system });
+
+      const parts: any[] = [];
+
+      if (activePaths.length > 0) {
+        for (const path of activePaths) {
+          const { data } = await supabase.storage.from('books').download(path);
+          if (data) {
+            const buffer = Buffer.from(await data.arrayBuffer());
+            parts.push({ inlineData: { mimeType: "application/pdf", data: buffer.toString('base64') } });
+          }
         }
+      } else if (pdfBase64) {
+        parts.push({ inlineData: { mimeType: "application/pdf", data: pdfBase64 } });
       }
-    } else if (pdfBase64) {
-      const buffer = Buffer.from(pdfBase64, 'base64');
-      const pdfData = await pdf(buffer);
-      textContext = pdfData.text;
+
+      parts.push({ text: prompt });
+      const result = await model.generateContent(parts);
+      const response = await result.response;
+      let text = response.text();
+      if (jsonMode) text = text.replace(/```json\n?|```/g, '').trim();
+      return res.json({ response: text });
     }
 
-    const finalPrompt = textContext
-      ? `CONTEXT FROM PDF:\n${textContext.slice(0, 30000)}\n\nUSER PROMPT: ${prompt}`
-      : prompt;
-
-    const response = await callAgent(agent as AgentType, finalPrompt, system, jsonMode, userKeys);
+    const response = await callAgent(agent as AgentType, prompt, system, jsonMode, userKeys);
     res.json({ response });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -72,15 +76,22 @@ app.post('/api/analyze/toc', async (req, res) => {
     if (downloadError || !data) throw new Error('Failed to download PDF');
 
     const buffer = Buffer.from(await data.arrayBuffer());
-    const pdfData = await pdf(buffer);
-    const fullText = pdfData.text;
+    const geminiKey = userKeys?.gemini || process.env.GEMINI_API_KEY || "";
+    const activeAI = new GoogleGenAI(geminiKey);
+    const model = activeAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-    const tocPrompt = `Extract the Table of Contents from this textbook text.
+    const tocPrompt = `Extract the full Table of Contents from this textbook.
     Identify every Unit, Chapter, and Lesson.
+    Include even small topics.
     Return a JSON array of objects: { "unit": string, "chapter": string, "lesson": string, "topic": string }`;
 
-    const tocResponse = await callAgent('gemini', fullText.slice(0, 50000), tocPrompt, true, userKeys);
-    const toc = JSON.parse(tocResponse);
+    const result = await model.generateContent([
+      { inlineData: { mimeType: "application/pdf", data: buffer.toString('base64') } },
+      { text: tocPrompt }
+    ]);
+    const response = await result.response;
+    let text = response.text().replace(/```json\n?|```/g, '').trim();
+    const toc = JSON.parse(text);
 
     res.json({ toc });
   } catch (error: any) {
@@ -97,20 +108,32 @@ app.post('/api/analyze/topic', async (req, res) => {
     if (downloadError || !data) throw new Error('Failed to download PDF');
 
     const buffer = Buffer.from(await data.arrayBuffer());
-    const pdfData = await pdf(buffer);
-    const fullText = pdfData.text;
+    const geminiKey = userKeys?.gemini || process.env.GEMINI_API_KEY || "";
+    const activeAI = new GoogleGenAI(geminiKey);
+    const model = activeAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-    const detailPrompt = `Extract micro-details for: Unit: ${tocItem.unit}, Lesson: ${tocItem.lesson}, Topic: ${tocItem.topic}.
-    Capture:
-    - full_content (detailed explanation)
+    const detailPrompt = `You are an expert academic analyzer. Extract detailed content for the following section from this textbook.
+
+    SECTION:
+    Unit: ${tocItem.unit}
+    Lesson/Topic: ${tocItem.topic}
+
+    REQUIREMENTS:
+    1. Extract EVERYTHING related to this section.
+    2. full_content: Capture the entire detailed text.
     - goals (learning outcomes)
     - key_points (array)
     - examples (array)
     - formulas (array)
     Return as JSON.`;
 
-    const detailResponse = await callAgent('gemini', fullText, detailPrompt, true, userKeys);
-    const details = JSON.parse(detailResponse);
+    const result = await model.generateContent([
+      { inlineData: { mimeType: "application/pdf", data: buffer.toString('base64') } },
+      { text: detailPrompt }
+    ]);
+    const response = await result.response;
+    let text = response.text().replace(/```json\n?|```/g, '').trim();
+    const details = JSON.parse(text);
 
     const content = { ...tocItem, ...details, book_id: bookId };
 
