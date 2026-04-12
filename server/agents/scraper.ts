@@ -11,7 +11,6 @@ export interface PDFLink {
  */
 export async function scrapePDFLinksWithGemini(targetUrl: string, apiKey: string): Promise<PDFLink[]> {
   const ai = new GoogleGenAI({ apiKey });
-  const model = ai.getGenerativeModel({ model: "gemini-1.5-flash" });
 
   try {
     const browser = await chromium.launch({ headless: true });
@@ -52,9 +51,12 @@ export async function scrapePDFLinksWithGemini(targetUrl: string, apiKey: string
     Return a JSON array of objects with "url" and "title" for each PDF link found.
     HTML: ${html.slice(0, 50000)}`; // Basic truncation for context window
 
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const text = response.text().replace(/```json\n?|```/g, '').trim();
+    const result = await ai.models.generateContent({
+      model: "gemini-1.5-flash",
+      contents: [{ role: 'user', parts: [{ text: prompt }] }]
+    });
+
+    const text = (result.text || "").replace(/```json\n?|```/g, '').trim();
     return JSON.parse(text);
   } catch (error) {
     console.error('Gemini scraping error:', error);

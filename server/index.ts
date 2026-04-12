@@ -5,6 +5,7 @@ import { createClient } from '@supabase/supabase-js';
 import { runAutonomousIngestion } from './services/orchestrator.js';
 import { callAgent, AgentType } from './services/multiAgent.js';
 import { GoogleGenAI } from "@google/genai";
+import pdf from 'pdf-parse';
 
 dotenv.config();
 
@@ -29,43 +30,95 @@ app.get('/health', (req, res) => {
 });
 
 app.post('/api/chat', async (req, res) => {
-  const { prompt, system, agent, jsonMode, pdfBase64, pdfPath, userKeys } = req.body;
+  const { prompt, system, agent, jsonMode, pdfBase64, pdfPath, pdfPaths, userKeys } = req.body;
   try {
-    let activePdfData = pdfBase64;
+    let textContext = "";
 
-    // If a pdfPath is provided, download it from Supabase
-    if (pdfPath && !activePdfData) {
-       const { data, error } = await supabase.storage.from('books').download(pdfPath);
-       if (!error && data) {
-          const buffer = await data.arrayBuffer();
-          activePdfData = Buffer.from(buffer).toString('base64');
-       }
+    // Handle multiple PDF paths (for Exam Generator)
+    const activePaths = pdfPaths || (pdfPath ? [pdfPath] : []);
+
+    if (activePaths.length > 0) {
+      for (const path of activePaths) {
+        const { data, error } = await supabase.storage.from('books').download(path);
+        if (!error && data) {
+          const buffer = Buffer.from(await data.arrayBuffer());
+          const pdfData = await pdf(buffer);
+          textContext += `\n--- SOURCE: ${path} ---\n${pdfData.text}\n`;
+        }
+      }
+    } else if (pdfBase64) {
+      const buffer = Buffer.from(pdfBase64, 'base64');
+      const pdfData = await pdf(buffer);
+      textContext = pdfData.text;
     }
 
-    // If PDF is provided, we currently only support Gemini for multimodal
-    if (activePdfData) {
-      const geminiKey = userKeys?.gemini || process.env.GEMINI_API_KEY || "";
-      const activeAI = new GoogleGenAI({ apiKey: geminiKey });
+    const finalPrompt = textContext
+      ? `CONTEXT FROM PDF:\n${textContext.slice(0, 30000)}\n\nUSER PROMPT: ${prompt}`
+      : prompt;
 
-      const result = await activeAI.models.generateContent({
-        model: "gemini-1.5-flash",
-        systemInstruction: system,
-        contents: [{
-          role: 'user',
-          parts: [
-            { inlineData: { mimeType: "application/pdf", data: activePdfData } },
-            { text: prompt }
-          ]
-        }]
-      });
-
-      let text = result.text || "";
-      if (jsonMode) text = text.replace(/```json\n?|```/g, '').trim();
-      return res.json({ response: text });
-    }
-
-    const response = await callAgent(agent as AgentType, prompt, system, jsonMode, userKeys);
+    const response = await callAgent(agent as AgentType, finalPrompt, system, jsonMode, userKeys);
     res.json({ response });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/analyze/toc', async (req, res) => {
+  const { pdfPath, userKeys } = req.body;
+  if (!pdfPath) return res.status(400).json({ error: 'PDF Path is required' });
+
+  try {
+    const { data, error: downloadError } = await supabase.storage.from('books').download(pdfPath);
+    if (downloadError || !data) throw new Error('Failed to download PDF');
+
+    const buffer = Buffer.from(await data.arrayBuffer());
+    const pdfData = await pdf(buffer);
+    const fullText = pdfData.text;
+
+    const tocPrompt = `Extract the Table of Contents from this textbook text.
+    Identify every Unit, Chapter, and Lesson.
+    Return a JSON array of objects: { "unit": string, "chapter": string, "lesson": string, "topic": string }`;
+
+    const tocResponse = await callAgent('gemini', fullText.slice(0, 50000), tocPrompt, true, userKeys);
+    const toc = JSON.parse(tocResponse);
+
+    res.json({ toc });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/analyze/topic', async (req, res) => {
+  const { bookId, pdfPath, tocItem, userKeys } = req.body;
+  if (!bookId || !pdfPath || !tocItem) return res.status(400).json({ error: 'Missing required parameters' });
+
+  try {
+    const { data, error: downloadError } = await supabase.storage.from('books').download(pdfPath);
+    if (downloadError || !data) throw new Error('Failed to download PDF');
+
+    const buffer = Buffer.from(await data.arrayBuffer());
+    const pdfData = await pdf(buffer);
+    const fullText = pdfData.text;
+
+    const detailPrompt = `Extract micro-details for: Unit: ${tocItem.unit}, Lesson: ${tocItem.lesson}, Topic: ${tocItem.topic}.
+    Capture:
+    - full_content (detailed explanation)
+    - goals (learning outcomes)
+    - key_points (array)
+    - examples (array)
+    - formulas (array)
+    Return as JSON.`;
+
+    const detailResponse = await callAgent('gemini', fullText, detailPrompt, true, userKeys);
+    const details = JSON.parse(detailResponse);
+
+    const content = { ...tocItem, ...details, book_id: bookId };
+
+    // Save/Update to Supabase
+    const { error: insertError } = await supabase.from('book_contents').upsert([content], { onConflict: 'book_id,topic' });
+    if (insertError) throw insertError;
+
+    res.json({ success: true, content });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

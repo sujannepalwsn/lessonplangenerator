@@ -40,18 +40,33 @@ export async function callAgent(
 async function callGemini(prompt: string, system?: string, jsonMode?: boolean, customKey?: string): Promise<string> {
   const activeAI = customKey ? new GoogleGenAI({ apiKey: customKey }) : genAI;
 
-  const result = await activeAI.models.generateContent({
-    model: "gemini-1.5-flash",
-    systemInstruction: system,
-    contents: [{ role: 'user', parts: [{ text: prompt }] }]
-  });
+  try {
+    const result = await activeAI.models.generateContent({
+      model: "gemini-1.5-flash",
+      systemInstruction: system,
+      contents: [{ role: 'user', parts: [{ text: prompt }] }]
+    });
 
-  let text = result.text || "";
+    let text = result.text || "";
 
-  if (jsonMode) {
-     text = text.replace(/```json\n?|```/g, '').trim();
+    if (jsonMode) {
+      // Robust JSON extraction
+      const jsonMatch = text.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
+      if (jsonMatch) {
+        text = jsonMatch[0];
+      } else {
+        text = text.replace(/```json\n?|```/g, '').trim();
+      }
+    }
+    return text;
+  } catch (err: any) {
+    console.error("Gemini Error:", err);
+    // Standardize error message for frontend
+    if (err.message?.includes("404") || err.message?.includes("not found")) {
+      throw new Error("Gemini 1.5 Flash model not found or unsupported in this region/version.");
+    }
+    throw err;
   }
-  return text;
 }
 
 async function callGroq(prompt: string, system?: string, jsonMode?: boolean, customKey?: string): Promise<string> {

@@ -43,29 +43,26 @@ export function ExamGenerator({ agent }: { agent?: string }) {
       const bookContext = contents?.map(c => `Topic: ${c.topic}\nContent: ${c.content}`).join('\n\n') || '';
 
       // 2. Prepare files if any - use Supabase storage to avoid 413 payload limits
-      let uploadedFilePath = '';
+      const uploadedPaths: string[] = [];
       let fileInstruction = '';
 
-      if (cdcGridFile || samplePaperFile) {
-        const fileToProcess = cdcGridFile || samplePaperFile;
-        const fileName = `${Date.now()}_${fileToProcess!.name}`;
+      const uploadFile = async (file: File) => {
+        const fileName = `${Date.now()}_${file.name}`;
         const filePath = `temp_exams/${fileName}`;
+        const { error } = await supabase.storage.from('books').upload(filePath, file);
+        if (!error) uploadedPaths.push(filePath);
+        return filePath;
+      };
 
-        const { error: uploadError } = await supabase.storage
-          .from('books') // Using existing 'books' bucket for simplicity
-          .upload(filePath, fileToProcess!);
+      if (cdcGridFile) await uploadFile(cdcGridFile);
+      if (samplePaperFile) await uploadFile(samplePaperFile);
 
-        if (!uploadError) {
-          uploadedFilePath = filePath;
-        }
-
-        if (cdcGridFile && samplePaperFile) {
-           fileInstruction = "Analyze the provided PDF which contains the CDC Specification Grid and Sample Question Paper. Use both as knowledge.";
-        } else if (cdcGridFile) {
-           fileInstruction = "Strictly follow the structure and mark distribution found in the provided CDC Specification Grid PDF.";
-        } else {
-           fileInstruction = "Use the provided Question Sample PDF as a template for the format and style of questions.";
-        }
+      if (cdcGridFile && samplePaperFile) {
+        fileInstruction = "Analyze both provided PDFs: one contains the CDC Specification Grid and the other a Sample Question Paper. Strictly follow the grid's mark distribution and the sample's format.";
+      } else if (cdcGridFile) {
+        fileInstruction = "Strictly follow the structure and mark distribution found in the provided CDC Specification Grid PDF.";
+      } else if (samplePaperFile) {
+        fileInstruction = "Use the provided Question Sample PDF as a template for the format and style of questions.";
       }
 
       // 3. Call API
@@ -83,7 +80,7 @@ export function ExamGenerator({ agent }: { agent?: string }) {
         body: JSON.stringify({
           agent: agent || 'gemini',
           userKeys,
-          pdfPath: uploadedFilePath || undefined,
+          pdfPaths: uploadedPaths.length > 0 ? uploadedPaths : undefined,
           jsonMode: true,
           prompt: `Generate a complete exam paper based on the following context.
 

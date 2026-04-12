@@ -581,40 +581,61 @@ export default function App() {
 
   const analyzeExistingBook = async (book: Book) => {
     if (!book.file_path) return;
-    setBookToAnalyze(book);
-    navigate('/analyze');
     setIsProcessing(true);
+    setBulkTotal(0);
+    setBulkProgress(0);
     setError(null);
-    setParsedContents([]);
-    setParsedReaderContents([]);
+    setSuccess(null);
 
     try {
-      // 1. New TOC-First Unified Extraction using pdfPath to avoid payload limits
-      const toc = await extractTOC(undefined, book.file_path);
-      setBulkTotal(toc.length);
-      setBulkProgress(0);
+      const savedKeysRaw = localStorage.getItem('ai_api_keys');
+      const userKeys = savedKeysRaw ? JSON.parse(savedKeysRaw) : {};
 
-      const allExtracted: Partial<BookContent>[] = [];
-
-      for (let i = 0; i < toc.length; i++) {
-        setBulkProgress(i + 1);
-        try {
-          const details = await unifiedBookExtraction(undefined, toc[i], book.file_path);
-          allExtracted.push(details);
-          // Update state incrementally so user sees progress
-          setParsedContents([...allExtracted]);
-        } catch (err) {
-          console.error(`Failed to extract topic ${i}:`, err);
-        }
+      let backendUrl = userKeys.backend_url || import.meta.env.VITE_BACKEND_URL;
+      if (!backendUrl) {
+        backendUrl = import.meta.env.PROD ? window.location.origin : 'http://localhost:3001';
       }
 
-      setParsedContents(allExtracted);
-      setParsedReaderContents(allExtracted as Partial<BookReaderContent>[]);
-      setIsProcessing(false);
-      setSuccess(`Successfully extracted ${allExtracted.length} topics from "${book.title}"!`);
+      // 1. Extract TOC (Fast)
+      const tocResponse = await fetch(`${backendUrl}/api/analyze/toc`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pdfPath: book.file_path, userKeys })
+      });
+
+      if (!tocResponse.ok) throw new Error('Failed to extract Table of Contents');
+      const { toc } = await tocResponse.json();
+
+      setBulkTotal(toc.length);
+
+      // Clear existing contents for this book before bulk insert
+      const supabase = getSupabase();
+      await supabase.from('book_contents').delete().eq('book_id', book.id);
+
+      // 2. Extract each topic individually (to avoid Vercel timeouts)
+      for (let i = 0; i < toc.length; i++) {
+        setBulkProgress(i + 1);
+        const topicResponse = await fetch(`${backendUrl}/api/analyze/topic`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            bookId: book.id,
+            pdfPath: book.file_path,
+            tocItem: toc[i],
+            userKeys
+          })
+        });
+
+        if (!topicResponse.ok) console.warn(`Failed to analyze topic: ${toc[i].topic}`);
+      }
+
+      setSuccess(`Analysis complete for "${book.title}"! ${toc.length} topics extracted.`);
+      fetchAllBooks();
+      fetchGrades();
     } catch (err) {
       console.error(err);
-      setError('Failed to retrieve book for analysis.');
+      setError(err instanceof Error ? err.message : 'Failed to analyze book');
+    } finally {
       setIsProcessing(false);
     }
   };

@@ -35,23 +35,12 @@ async function callAgentAPI(params: {
   pdfBase64?: string,
   pdfPath?: string
 }): Promise<any> {
-  const agent = params.agent || 'gemini';
+  // To make the system "perfect" and avoid browser-specific SDK errors,
+  // we route ALL AI calls through the backend proxy.
 
   // Get keys from localStorage
   const savedKeysRaw = localStorage.getItem('ai_api_keys');
   const userKeys = savedKeysRaw ? JSON.parse(savedKeysRaw) : {};
-
-  // If it's gemini and we have a user key, or it's standard call without PDF/Path
-  if (agent === 'gemini' && !params.pdfBase64 && !params.pdfPath) {
-    const geminiKey = userKeys.gemini || apiKey;
-    const userAI = new GoogleGenAI(geminiKey);
-    const model = userAI.getGenerativeModel({
-      model: "gemini-1.5-flash",
-      systemInstruction: params.system
-    });
-    const result = await model.generateContent(params.prompt);
-    return result.response;
-  }
 
   // Inject user keys into params for backend proxy
   const paramsWithKeys = {
