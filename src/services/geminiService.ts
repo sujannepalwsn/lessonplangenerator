@@ -1,9 +1,9 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { LessonPlan, BookContent, BookReaderContent } from "../types";
 
 // Use import.meta.env for Vite/Vercel deployments, fallback to process.env for AI Studio environment
 const apiKey = import.meta.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || "";
-const ai = new GoogleGenAI({ apiKey });
+const ai = new GoogleGenerativeAI(apiKey);
 
 function getBackendUrl() {
   const savedKeysRaw = localStorage.getItem('ai_api_keys');
@@ -33,25 +33,43 @@ async function callAgentAPI(params: {
   agent?: string,
   jsonMode?: boolean,
   pdfBase64?: string,
-  pdfPath?: string
+  pdfPath?: string,
+  pdfPaths?: string[]
 }): Promise<any> {
-  // To make the system "perfect" and avoid browser-specific SDK errors,
-  // we route ALL AI calls through the backend proxy.
+  const agent = params.agent || 'gemini';
 
   // Get keys from localStorage
   const savedKeysRaw = localStorage.getItem('ai_api_keys');
   const userKeys = savedKeysRaw ? JSON.parse(savedKeysRaw) : {};
 
+  // If we're on a browser and it's a simple text task with a user key,
+  // try calling Gemini directly to reduce backend load and potential 500s.
+  if (agent === 'gemini' && !params.pdfBase64 && !params.pdfPath && !params.pdfPaths && userKeys.gemini) {
+    try {
+      const { GoogleGenerativeAI } = await import("@google/generative-ai");
+      const userAI = new GoogleGenerativeAI(userKeys.gemini);
+      const model = userAI.getGenerativeModel({
+        model: "gemini-1.5-flash",
+        systemInstruction: params.system
+      });
+      const result = await model.generateContent(params.prompt);
+      const response = await result.response;
+      let text = response.text();
+
+      if (params.jsonMode) {
+        const match = text.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
+        if (match) text = match[0];
+      }
+      return { text: () => text };
+    } catch (directErr) {
+      console.warn("Direct Gemini call failed, falling back to backend proxy", directErr);
+    }
+  }
+
   // Inject user keys into params for backend proxy
   const paramsWithKeys = {
     ...params,
-    userKeys: {
-      gemini: userKeys.gemini,
-      groq: userKeys.groq,
-      huggingface: userKeys.huggingface,
-      ollama_url: userKeys.ollama_url,
-      ollama_model: userKeys.ollama_model
-    }
+    userKeys
   };
 
   // Otherwise, call the backend proxy
@@ -81,14 +99,11 @@ async function callAgentAPI(params: {
  */
 async function callGeminiWithRetry(params: any, maxRetries = 3): Promise<any> {
   let lastError: any;
+  const model = ai.getGenerativeModel({ model: params.model || "gemini-1.5-flash" });
 
   for (let i = 0; i < maxRetries; i++) {
     try {
-      // Compatibility with old calls
-      if (params.model?.includes('gemini-3')) {
-         params.model = 'gemini-1.5-pro';
-      }
-      return await ai.models.generateContent(params);
+      return await model.generateContent(params.contents);
     } catch (error: any) {
       lastError = error;
 

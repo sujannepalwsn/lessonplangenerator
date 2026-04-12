@@ -1,5 +1,5 @@
 import { chromium } from 'playwright';
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 export interface PDFLink {
   url: string;
@@ -10,7 +10,7 @@ export interface PDFLink {
  * Scrape PDF links using Gemini 3 Flash (Primary)
  */
 export async function scrapePDFLinksWithGemini(targetUrl: string, apiKey: string): Promise<PDFLink[]> {
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = new GoogleGenerativeAI({ apiKey });
 
   try {
     const browser = await chromium.launch({ headless: true });

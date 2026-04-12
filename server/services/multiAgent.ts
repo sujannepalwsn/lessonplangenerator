@@ -1,4 +1,4 @@
-import { GoogleGenAI } from "@google/generative-ai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import Groq from "groq-sdk";
 import axios from 'axios';
 
@@ -6,7 +6,7 @@ const geminiApiKey = process.env.GEMINI_API_KEY || "";
 const groqApiKey = process.env.GROQ_API_KEY || "";
 const huggingFaceToken = process.env.HF_TOKEN || "";
 
-const genAI = new GoogleGenAI({ apiKey: geminiApiKey });
+const genAI = new GoogleGenerativeAI(geminiApiKey);
 const groq = groqApiKey ? new Groq({ apiKey: groqApiKey }) : null;
 
 export type AgentType = 'gemini' | 'groq' | 'huggingface' | 'ollama';
@@ -38,7 +38,7 @@ export async function callAgent(
 }
 
 async function callGemini(prompt: string, system?: string, jsonMode?: boolean, customKey?: string): Promise<string> {
-  const activeAI = customKey ? new GoogleGenAI(customKey) : genAI;
+  const activeAI = customKey ? new GoogleGenerativeAI(customKey) : genAI;
   const model = activeAI.getGenerativeModel({
     model: "gemini-1.5-flash",
     systemInstruction: system
