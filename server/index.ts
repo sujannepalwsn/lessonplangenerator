@@ -1,9 +1,12 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from './lib/supabase.js';
+import { runAutonomousIngestion } from './services/orchestrator.js';
+import { callAgent, AgentType } from './services/multiAgent.js';
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import pdf from 'pdf-parse';
+// Import from lib to avoid the buggy index.js in pdf-parse that tries to open a test file
+import pdf from 'pdf-parse/lib/pdf-parse.js';
 
 dotenv.config();
 
@@ -12,11 +15,6 @@ const port = process.env.PORT || 3001;
 
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
-
-// Initialize Supabase
-const supabaseUrl = process.env.SUPABASE_URL || 'https://placeholder.supabase.co';
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 'placeholder-key';
-const supabase = createClient(supabaseUrl, supabaseKey);
 
 app.get('/health', (req, res) => {
   res.json({

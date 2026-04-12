@@ -1,4 +1,4 @@
-import { supabase } from '../index.js';
+import { supabase } from '../lib/supabase.js';
 import { scrapePDFLinks, scrapePDFLinksWithGemini, PDFLink } from '../agents/scraper.js';
 import { downloadPDF, extractMetadataWithOllama, BookMetadata } from '../agents/metadata.js';
 import { GoogleGenerativeAI } from "@google/generative-ai";
