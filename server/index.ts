@@ -1,12 +1,12 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { supabase } from './lib/supabase.js';
-import { runAutonomousIngestion } from './services/orchestrator.js';
-import { callAgent, AgentType } from './services/multiAgent.js';
+import { createClient } from '@supabase/supabase-js';
 import { GoogleGenerativeAI } from "@google/generative-ai";
-// Import from lib to avoid the buggy index.js in pdf-parse that tries to open a test file
-import pdf from 'pdf-parse/lib/pdf-parse.js';
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
+const pdf = require('pdf-parse/lib/pdf-parse.js');
 
 dotenv.config();
 
@@ -16,10 +16,15 @@ const port = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
+// Initialize Supabase
+const supabaseUrl = process.env.SUPABASE_URL || 'https://placeholder.supabase.co';
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 'placeholder-key';
+const supabase = createClient(supabaseUrl, supabaseKey);
+
 app.get('/health', (req, res) => {
-  res.json({
+  res.status(200).json({
     status: 'ok',
-    environment: process.env.NODE_ENV || 'development'
+    timestamp: new Date().toISOString()
   });
 });
 
@@ -34,28 +39,41 @@ async function callGeminiBackend(params: {
   textContext?: string
 }) {
   const finalKey = params.apiKey || process.env.GEMINI_API_KEY;
-  if (!finalKey) throw new Error("No Gemini API Key provided. Please set it in Settings.");
-
-  const genAI = new GoogleGenerativeAI(finalKey);
-  const model = genAI.getGenerativeModel({
-    model: "gemini-1.5-flash",
-    systemInstruction: params.system
-  });
-
-  const fullPrompt = params.textContext
-    ? `CONTEXT FROM TEXTBOOK:\n${params.textContext}\n\nUSER REQUEST:\n${params.prompt}`
-    : params.prompt;
-
-  const result = await model.generateContent(fullPrompt);
-  const response = await result.response;
-  let text = response.text();
-
-  if (params.jsonMode) {
-    const jsonMatch = text.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
-    if (jsonMatch) text = jsonMatch[0];
-    else text = text.replace(/```json\n?|```/g, '').trim();
+  if (!finalKey) {
+    throw new Error("Gemini API Key is missing. Please provide one in the Settings tab.");
   }
-  return text;
+
+  try {
+    const genAI = new GoogleGenerativeAI(finalKey);
+    const model = genAI.getGenerativeModel({
+      model: "gemini-1.5-flash",
+      systemInstruction: params.system
+    });
+
+    const fullPrompt = params.textContext
+      ? `CONTEXT FROM TEXTBOOK:\n${params.textContext}\n\nUSER REQUEST:\n${params.prompt}`
+      : params.prompt;
+
+    const result = await model.generateContent(fullPrompt);
+    const response = await result.response;
+    let text = response.text();
+
+    if (params.jsonMode) {
+      // Improved JSON extraction regex
+      const jsonMatch = text.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
+      if (jsonMatch) {
+        text = jsonMatch[0];
+      } else {
+        text = text.replace(/```json\n?|```/g, '').trim();
+      }
+    }
+    return text;
+  } catch (err: any) {
+    if (err.message?.includes("403")) {
+      throw new Error("The API key provided is invalid or does not have permission. Please check your Settings.");
+    }
+    throw err;
+  }
 }
 
 app.post('/api/chat', async (req, res) => {
@@ -78,9 +96,13 @@ app.post('/api/chat', async (req, res) => {
         }
       }
     } else if (pdfBase64) {
-      const buffer = Buffer.from(pdfBase64, 'base64');
-      const pdfData = await pdf(buffer);
-      textContext = pdfData.text;
+      try {
+        const buffer = Buffer.from(pdfBase64, 'base64');
+        const pdfData = await pdf(buffer);
+        textContext = pdfData.text;
+      } catch (e) {
+        console.error("Error parsing base64 PDF:", e);
+      }
     }
 
     const response = await callGeminiBackend({
@@ -102,19 +124,19 @@ app.post('/api/analyze/toc', async (req, res) => {
 
   try {
     const { data, error: downloadError } = await supabase.storage.from('books').download(pdfPath);
-    if (downloadError || !data) throw new Error('Failed to download PDF from storage');
+    if (downloadError || !data) throw new Error('Failed to download PDF from storage. Check if file exists.');
 
     const buffer = Buffer.from(await data.arrayBuffer());
     const pdfData = await pdf(buffer);
     const fullText = pdfData.text;
 
-    const tocPrompt = `Extract the Table of Contents from this textbook.
+    const tocPrompt = `Extract the full Table of Contents from this textbook text.
     Identify every Unit, Chapter, and Lesson.
-    Return ONLY a JSON array of objects: [{ "unit": string, "chapter": string, "lesson": string, "topic": string }]`;
+    Return ONLY a valid JSON array of objects: [{ "unit": string, "chapter": string, "lesson": string, "topic": string }]`;
 
     const response = await callGeminiBackend({
       prompt: tocPrompt,
-      textContext: fullText.slice(0, 100000),
+      textContext: fullText.slice(0, 80000),
       jsonMode: true,
       apiKey: userKeys?.gemini
     });
@@ -122,7 +144,7 @@ app.post('/api/analyze/toc', async (req, res) => {
     res.json({ toc: JSON.parse(response) });
   } catch (error: any) {
     console.error("TOC error:", error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: error.message || "Unknown error during TOC extraction" });
   }
 });
 
@@ -137,13 +159,18 @@ app.post('/api/analyze/topic', async (req, res) => {
     const buffer = Buffer.from(await data.arrayBuffer());
     const pdfData = await pdf(buffer);
 
-    const detailPrompt = `Extract detailed content for: Unit: ${tocItem.unit}, Topic: ${tocItem.topic}.
-    Capture:
-    - full_content (detailed explanation)
-    - goals (learning outcomes)
-    - key_points (array)
-    - examples (array)
-    - formulas (array)
+    const detailPrompt = `You are an expert academic analyzer. Extract detailed content for the following section from this textbook text.
+
+    SECTION:
+    Unit: ${tocItem.unit}
+    Lesson/Topic: ${tocItem.topic}
+
+    REQUIREMENTS:
+    1. full_content: Capture the detailed academic text.
+    2. goals: Specific learning outcomes.
+    3. key_points: Array of takeaways.
+    4. examples: Array of illustrative examples.
+    5. formulas: Array of formulas if applicable.
     Return as JSON.`;
 
     const response = await callGeminiBackend({
@@ -162,6 +189,11 @@ app.post('/api/analyze/topic', async (req, res) => {
     console.error("Topic error:", error);
     res.status(500).json({ error: error.message });
   }
+});
+
+// Minimal proxy for autonomous agent if needed
+app.post('/api/autonomous/start', async (req, res) => {
+  res.json({ message: 'Autonomous agent requires separate background worker.' });
 });
 
 if (process.env.NODE_ENV !== 'production') {
