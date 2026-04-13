@@ -161,21 +161,37 @@ app.post('/api/analyze/toc', async (req, res) => {
     if (downloadError || !data) throw new Error('Failed to download PDF from storage. Check if file exists.');
 
     const buffer = Buffer.from(await data.arrayBuffer());
-    const pdfData = await pdf(buffer);
-    const fullText = pdfData.text;
 
-    const tocPrompt = `Extract the full Table of Contents from this textbook text.
+    // Use the robust pdfParser (Docling)
+    const fs = await import('fs');
+    const path = await import('path');
+    const { parsePdfToMarkdown } = await import('./services/pdfParser.js');
+
+    const tempDir = path.join(process.cwd(), 'temp');
+    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+    const tempPath = path.join(tempDir, `toc_${Date.now()}.pdf`);
+    fs.writeFileSync(tempPath, buffer);
+
+    const markdown = await parsePdfToMarkdown(tempPath);
+    fs.unlinkSync(tempPath);
+
+    const tocPrompt = `Extract the full Table of Contents from this textbook markdown.
     Identify every Unit, Chapter, and Lesson.
     Return ONLY a valid JSON array of objects: [{ "unit": string, "chapter": string, "lesson": string, "topic": string }]`;
 
     const response = await callGeminiBackend({
       prompt: tocPrompt,
-      textContext: fullText.slice(0, 80000),
+      textContext: markdown.slice(0, 50000),
       jsonMode: true,
       apiKey: userKeys?.gemini
     });
 
-    res.json({ toc: JSON.parse(response) });
+    try {
+      res.json({ toc: JSON.parse(response) });
+    } catch (parseError) {
+      console.error("Failed to parse TOC JSON:", response);
+      throw new Error("AI returned invalid Table of Contents data. Please try again.");
+    }
   } catch (error: any) {
     console.error("TOC error:", error);
     res.status(500).json({ error: error.message || "Unknown error during TOC extraction" });
@@ -191,16 +207,28 @@ app.post('/api/analyze/topic', async (req, res) => {
     if (downloadError || !data) throw new Error('Failed to download PDF');
 
     const buffer = Buffer.from(await data.arrayBuffer());
-    const pdfData = await pdf(buffer);
 
-    const detailPrompt = `You are an expert academic analyzer. Extract detailed content for the following section from this textbook text.
+    // Use the robust pdfParser (Docling)
+    const fs = await import('fs');
+    const path = await import('path');
+    const { parsePdfToMarkdown } = await import('./services/pdfParser.js');
+
+    const tempDir = path.join(process.cwd(), 'temp');
+    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+    const tempPath = path.join(tempDir, `topic_${Date.now()}.pdf`);
+    fs.writeFileSync(tempPath, buffer);
+
+    const markdown = await parsePdfToMarkdown(tempPath);
+    fs.unlinkSync(tempPath);
+
+    const detailPrompt = `You are an expert academic analyzer. Extract detailed content for the following section from this textbook markdown.
 
     SECTION:
     Unit: ${tocItem.unit}
-    Lesson/Topic: ${tocItem.topic}
+    Lesson/Topic: ${tocItem.topic || tocItem.lesson}
 
     REQUIREMENTS:
-    1. full_content: Capture the detailed academic text.
+    1. full_content: Capture the detailed academic text in Markdown.
     2. goals: Specific learning outcomes.
     3. key_points: Array of takeaways.
     4. examples: Array of illustrative examples.
@@ -209,16 +237,21 @@ app.post('/api/analyze/topic', async (req, res) => {
 
     const response = await callGeminiBackend({
       prompt: detailPrompt,
-      textContext: pdfData.text,
+      textContext: markdown.slice(0, 100000),
       jsonMode: true,
       apiKey: userKeys?.gemini
     });
 
-    const details = JSON.parse(response);
-    const content = { ...tocItem, ...details, book_id: bookId };
+    try {
+      const details = JSON.parse(response);
+      const content = { ...tocItem, ...details, book_id: bookId };
 
-    await supabase.from('book_contents').upsert([content], { onConflict: 'book_id,topic' });
-    res.json({ success: true });
+      await supabase.from('book_contents').upsert([content], { onConflict: 'book_id,topic' });
+      res.json({ success: true });
+    } catch (parseError) {
+      console.error("Failed to parse topic JSON:", response);
+      throw new Error("AI returned invalid content data for this topic.");
+    }
   } catch (error: any) {
     console.error("Topic error:", error);
     res.status(500).json({ error: error.message });
