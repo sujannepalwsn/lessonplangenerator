@@ -5,8 +5,12 @@ CREATE TABLE IF NOT EXISTS books (
   subject TEXT,
   class TEXT,
   file_path TEXT,
+  hash TEXT UNIQUE,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+-- Enable pgvector extension
+CREATE EXTENSION IF NOT EXISTS vector;
 
 -- Unified Book Contents Table
 CREATE TABLE IF NOT EXISTS book_contents (
@@ -24,6 +28,7 @@ CREATE TABLE IF NOT EXISTS book_contents (
   examples JSONB,
   formulas JSONB,
   page_number INTEGER,
+  embedding vector(768), -- For Gemini text-embedding-004
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -171,3 +176,52 @@ CREATE POLICY "Allow public access to agent_logs" ON agent_logs FOR ALL USING (t
 
 ALTER TABLE iteration_status ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Allow public access to iteration_status" ON iteration_status FOR ALL USING (true) WITH CHECK (true);
+
+-- Ingestion Queue Table
+CREATE TABLE IF NOT EXISTS ingestion_queue (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  book_id UUID REFERENCES books(id) ON DELETE CASCADE,
+  iteration_id UUID REFERENCES iteration_status(id) ON DELETE CASCADE,
+  status TEXT DEFAULT 'pending', -- pending, processing, completed, failed
+  error_message TEXT,
+  priority INTEGER DEFAULT 0,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+ALTER TABLE ingestion_queue ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow public access to ingestion_queue" ON ingestion_queue FOR ALL USING (true) WITH CHECK (true);
+
+-- Semantic Search RPC
+CREATE OR REPLACE FUNCTION match_book_contents (
+  query_embedding vector(768),
+  match_threshold float,
+  match_count int,
+  filter_book_id uuid DEFAULT NULL
+)
+RETURNS TABLE (
+  id uuid,
+  book_id uuid,
+  content text,
+  full_content text,
+  topic text,
+  similarity float
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  RETURN QUERY
+  SELECT
+    bc.id,
+    bc.book_id,
+    bc.content,
+    bc.full_content,
+    bc.topic,
+    1 - (bc.embedding <=> query_embedding) AS similarity
+  FROM book_contents bc
+  WHERE (filter_book_id IS NULL OR bc.book_id = filter_book_id)
+    AND 1 - (bc.embedding <=> query_embedding) > match_threshold
+  ORDER BY similarity DESC
+  LIMIT match_count;
+END;
+$$;

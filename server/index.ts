@@ -105,10 +105,44 @@ app.post('/api/chat', async (req, res) => {
       }
     }
 
+    // RAG Integration: If no PDF is provided but we have a bookId, search vector DB
+    let ragContext = textContext;
+    if (!ragContext && req.body.bookId) {
+      const genAI = new GoogleGenerativeAI(userKeys?.gemini || process.env.GEMINI_API_KEY!);
+      const embedModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
+      const embeddingResult = await embedModel.embedContent(prompt);
+      const embedding = embeddingResult.embedding.values;
+
+      const { data: matches, error: matchError } = await supabase.rpc('match_book_contents', {
+        query_embedding: embedding,
+        match_threshold: 0.5,
+        match_count: 5,
+        filter_book_id: req.body.bookId
+      });
+
+      if (!matchError && matches) {
+        ragContext = matches.map((m: any) => `[Topic: ${m.topic}]\n${m.content}`).join('\n\n');
+      }
+    }
+
+    // Include CDC Grid if applicable
+    if (req.body.subject && req.body.grade) {
+      const { data: grid } = await supabase
+        .from('cdc_grids')
+        .select('analyzed_data')
+        .eq('subject', req.body.subject)
+        .eq('class', req.body.grade)
+        .maybeSingle();
+
+      if (grid) {
+        ragContext = `CURRICULUM STANDARDS (CDC GRID):\n${JSON.stringify(grid.analyzed_data)}\n\n${ragContext}`;
+      }
+    }
+
     const response = await callGeminiBackend({
       prompt, system, jsonMode,
       apiKey: userKeys?.gemini,
-      textContext: textContext.slice(0, 40000)
+      textContext: ragContext.slice(0, 80000)
     });
 
     res.json({ response });
@@ -191,14 +225,45 @@ app.post('/api/analyze/topic', async (req, res) => {
   }
 });
 
-// Minimal proxy for autonomous agent if needed
+app.get('/api/autonomous/status', async (req, res) => {
+  const { data: iteration } = await supabase
+    .from('iteration_status')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .single();
+
+  const { data: logs } = await supabase
+    .from('agent_logs')
+    .select('*')
+    .eq('iteration_id', iteration?.id)
+    .order('created_at', { ascending: false })
+    .limit(20);
+
+  res.json({
+    status: iteration?.status || 'idle',
+    iteration: iteration,
+    logs: logs || []
+  });
+});
+
 app.post('/api/autonomous/start', async (req, res) => {
-  res.json({ message: 'Autonomous agent requires separate background worker.' });
+  const { url, userKeys } = req.body;
+  const { runAutonomousIngestion } = await import('./services/orchestrator.js');
+
+  // Start ingestion in the background
+  runAutonomousIngestion(url, userKeys).catch(console.error);
+
+  res.json({ message: 'Autonomous ingestion started' });
 });
 
 if (process.env.NODE_ENV !== 'production') {
-  app.listen(port, () => {
+  app.listen(port, async () => {
     console.log(`Backend server running on http://localhost:${port}`);
+
+    // Start the background worker
+    const { startWorker } = await import('./services/worker.js');
+    startWorker().catch(err => console.error("Worker failed to start:", err));
   });
 }
 
