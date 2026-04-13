@@ -1,4 +1,4 @@
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import Groq from "groq-sdk";
 import axios from 'axios';
 
@@ -6,7 +6,7 @@ const geminiApiKey = process.env.GEMINI_API_KEY || "";
 const groqApiKey = process.env.GROQ_API_KEY || "";
 const huggingFaceToken = process.env.HF_TOKEN || "";
 
-const genAI = new GoogleGenAI({ apiKey: geminiApiKey });
+const genAI = new GoogleGenerativeAI(geminiApiKey);
 const groq = groqApiKey ? new Groq({ apiKey: groqApiKey }) : null;
 
 export type AgentType = 'gemini' | 'groq' | 'huggingface' | 'ollama';
@@ -38,20 +38,35 @@ export async function callAgent(
 }
 
 async function callGemini(prompt: string, system?: string, jsonMode?: boolean, customKey?: string): Promise<string> {
-  const activeAI = customKey ? new GoogleGenAI({ apiKey: customKey }) : genAI;
-
-  const result = await activeAI.models.generateContent({
+  const activeAI = customKey ? new GoogleGenerativeAI(customKey) : genAI;
+  const model = activeAI.getGenerativeModel({
     model: "gemini-1.5-flash",
-    systemInstruction: system,
-    contents: [{ role: 'user', parts: [{ text: prompt }] }]
+    systemInstruction: system
   });
 
-  let text = result.text || "";
+  try {
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    let text = response.text();
 
-  if (jsonMode) {
-     text = text.replace(/```json\n?|```/g, '').trim();
+    if (jsonMode) {
+      // Robust JSON extraction
+      const jsonMatch = text.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
+      if (jsonMatch) {
+        text = jsonMatch[0];
+      } else {
+        text = text.replace(/```json\n?|```/g, '').trim();
+      }
+    }
+    return text;
+  } catch (err: any) {
+    console.error("Gemini Error:", err);
+    // Standardize error message for frontend
+    if (err.message?.includes("404") || err.message?.includes("not found")) {
+      throw new Error("Gemini 1.5 Flash model not found or unsupported in this region/version.");
+    }
+    throw err;
   }
-  return text;
 }
 
 async function callGroq(prompt: string, system?: string, jsonMode?: boolean, customKey?: string): Promise<string> {

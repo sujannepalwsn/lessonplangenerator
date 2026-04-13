@@ -2,9 +2,11 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
-import { runAutonomousIngestion } from './services/orchestrator.js';
-import { callAgent, AgentType } from './services/multiAgent.js';
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
+const pdf = require('pdf-parse/lib/pdf-parse.js');
 
 dotenv.config();
 
@@ -12,108 +14,186 @@ const app = express();
 const port = process.env.PORT || 3001;
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
 
 // Initialize Supabase
 const supabaseUrl = process.env.SUPABASE_URL || 'https://placeholder.supabase.co';
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 'placeholder-key';
-export const supabase = createClient(supabaseUrl, supabaseKey);
-const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 app.get('/health', (req, res) => {
-  res.json({
+  res.status(200).json({
     status: 'ok',
-    environment: process.env.NODE_ENV || 'development',
-    supabaseConnected: !!supabaseUrl && supabaseUrl !== 'https://placeholder.supabase.co'
+    timestamp: new Date().toISOString()
   });
 });
 
-app.post('/api/chat', async (req, res) => {
-  const { prompt, system, agent, jsonMode, pdfBase64, pdfPath, userKeys } = req.body;
+/**
+ * Robust helper to call Gemini with a custom key or environment key
+ */
+async function callGeminiBackend(params: {
+  prompt: string,
+  system?: string,
+  jsonMode?: boolean,
+  apiKey?: string,
+  textContext?: string
+}) {
+  const finalKey = params.apiKey || process.env.GEMINI_API_KEY;
+  if (!finalKey) {
+    throw new Error("Gemini API Key is missing. Please provide one in the Settings tab.");
+  }
+
   try {
-    let activePdfData = pdfBase64;
+    const genAI = new GoogleGenerativeAI(finalKey);
+    const model = genAI.getGenerativeModel({
+      model: "gemini-1.5-flash",
+      systemInstruction: params.system
+    });
 
-    // If a pdfPath is provided, download it from Supabase
-    if (pdfPath && !activePdfData) {
-       const { data, error } = await supabase.storage.from('books').download(pdfPath);
-       if (!error && data) {
-          const buffer = await data.arrayBuffer();
-          activePdfData = Buffer.from(buffer).toString('base64');
-       }
+    const fullPrompt = params.textContext
+      ? `CONTEXT FROM TEXTBOOK:\n${params.textContext}\n\nUSER REQUEST:\n${params.prompt}`
+      : params.prompt;
+
+    const result = await model.generateContent(fullPrompt);
+    const response = await result.response;
+    let text = response.text();
+
+    if (params.jsonMode) {
+      // Improved JSON extraction regex
+      const jsonMatch = text.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
+      if (jsonMatch) {
+        text = jsonMatch[0];
+      } else {
+        text = text.replace(/```json\n?|```/g, '').trim();
+      }
+    }
+    return text;
+  } catch (err: any) {
+    if (err.message?.includes("403")) {
+      throw new Error("The API key provided is invalid or does not have permission. Please check your Settings.");
+    }
+    throw err;
+  }
+}
+
+app.post('/api/chat', async (req, res) => {
+  const { prompt, system, agent, jsonMode, pdfBase64, pdfPath, pdfPaths, userKeys } = req.body;
+  try {
+    let textContext = "";
+    const activePaths = pdfPaths || (pdfPath ? [pdfPath] : []);
+
+    if (activePaths.length > 0) {
+      for (const path of activePaths) {
+        try {
+          const { data, error } = await supabase.storage.from('books').download(path);
+          if (!error && data) {
+            const buffer = Buffer.from(await data.arrayBuffer());
+            const pdfData = await pdf(buffer);
+            textContext += `\n--- SOURCE: ${path} ---\n${pdfData.text}\n`;
+          }
+        } catch (e) {
+          console.error(`Error parsing PDF at ${path}:`, e);
+        }
+      }
+    } else if (pdfBase64) {
+      try {
+        const buffer = Buffer.from(pdfBase64, 'base64');
+        const pdfData = await pdf(buffer);
+        textContext = pdfData.text;
+      } catch (e) {
+        console.error("Error parsing base64 PDF:", e);
+      }
     }
 
-    // If PDF is provided, we currently only support Gemini for multimodal
-    if (activePdfData) {
-      const geminiKey = userKeys?.gemini || process.env.GEMINI_API_KEY || "";
-      const activeAI = new GoogleGenAI({ apiKey: geminiKey });
+    const response = await callGeminiBackend({
+      prompt, system, jsonMode,
+      apiKey: userKeys?.gemini,
+      textContext: textContext.slice(0, 40000)
+    });
 
-      const result = await activeAI.models.generateContent({
-        model: "gemini-1.5-flash",
-        systemInstruction: system,
-        contents: [{
-          role: 'user',
-          parts: [
-            { inlineData: { mimeType: "application/pdf", data: activePdfData } },
-            { text: prompt }
-          ]
-        }]
-      });
-
-      let text = result.text || "";
-      if (jsonMode) text = text.replace(/```json\n?|```/g, '').trim();
-      return res.json({ response: text });
-    }
-
-    const response = await callAgent(agent as AgentType, prompt, system, jsonMode, userKeys);
     res.json({ response });
   } catch (error: any) {
+    console.error("Chat error:", error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// Basic structure for agent endpoints
-app.post('/api/autonomous/start', async (req, res) => {
-  const { url, userKeys } = req.body;
+app.post('/api/analyze/toc', async (req, res) => {
+  const { pdfPath, userKeys } = req.body;
+  if (!pdfPath) return res.status(400).json({ error: 'PDF Path is required' });
 
-  if (!url) {
-    return res.status(400).json({ error: 'URL is required' });
+  try {
+    const { data, error: downloadError } = await supabase.storage.from('books').download(pdfPath);
+    if (downloadError || !data) throw new Error('Failed to download PDF from storage. Check if file exists.');
+
+    const buffer = Buffer.from(await data.arrayBuffer());
+    const pdfData = await pdf(buffer);
+    const fullText = pdfData.text;
+
+    const tocPrompt = `Extract the full Table of Contents from this textbook text.
+    Identify every Unit, Chapter, and Lesson.
+    Return ONLY a valid JSON array of objects: [{ "unit": string, "chapter": string, "lesson": string, "topic": string }]`;
+
+    const response = await callGeminiBackend({
+      prompt: tocPrompt,
+      textContext: fullText.slice(0, 80000),
+      jsonMode: true,
+      apiKey: userKeys?.gemini
+    });
+
+    res.json({ toc: JSON.parse(response) });
+  } catch (error: any) {
+    console.error("TOC error:", error);
+    res.status(500).json({ error: error.message || "Unknown error during TOC extraction" });
   }
-
-  // Trigger ingestion in background
-  runAutonomousIngestion(url, userKeys).catch(console.error);
-
-  res.json({ message: 'Autonomous ingestion started in background', url });
 });
 
-app.get('/api/autonomous/status', async (req, res) => {
+app.post('/api/analyze/topic', async (req, res) => {
+  const { bookId, pdfPath, tocItem, userKeys } = req.body;
+  if (!bookId || !pdfPath || !tocItem) return res.status(400).json({ error: 'Missing parameters' });
+
   try {
-    // Return the most recent iteration status
-    const { data: iterations, error } = await supabase
-      .from('iteration_status')
-      .select('*')
-      .order('start_time', { ascending: false })
-      .limit(1);
+    const { data, error: downloadError } = await supabase.storage.from('books').download(pdfPath);
+    if (downloadError || !data) throw new Error('Failed to download PDF');
 
-    if (error) throw error;
+    const buffer = Buffer.from(await data.arrayBuffer());
+    const pdfData = await pdf(buffer);
 
-    const currentIteration = iterations?.[0] || null;
+    const detailPrompt = `You are an expert academic analyzer. Extract detailed content for the following section from this textbook text.
 
-    // Get recent logs as well
-    const { data: logs } = await supabase
-      .from('agent_logs')
-      .select('*')
-      .eq('iteration_id', currentIteration?.id)
-      .order('created_at', { ascending: false });
+    SECTION:
+    Unit: ${tocItem.unit}
+    Lesson/Topic: ${tocItem.topic}
 
-    res.json({
-      status: currentIteration?.status || 'idle',
-      iteration: currentIteration,
-      logs: logs || []
+    REQUIREMENTS:
+    1. full_content: Capture the detailed academic text.
+    2. goals: Specific learning outcomes.
+    3. key_points: Array of takeaways.
+    4. examples: Array of illustrative examples.
+    5. formulas: Array of formulas if applicable.
+    Return as JSON.`;
+
+    const response = await callGeminiBackend({
+      prompt: detailPrompt,
+      textContext: pdfData.text,
+      jsonMode: true,
+      apiKey: userKeys?.gemini
     });
-  } catch (err: any) {
-    // Fallback for when tables don't exist yet or config is missing
-    res.json({ status: 'idle', iteration: null, logs: [], note: err.message });
+
+    const details = JSON.parse(response);
+    const content = { ...tocItem, ...details, book_id: bookId };
+
+    await supabase.from('book_contents').upsert([content], { onConflict: 'book_id,topic' });
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error("Topic error:", error);
+    res.status(500).json({ error: error.message });
   }
+});
+
+// Minimal proxy for autonomous agent if needed
+app.post('/api/autonomous/start', async (req, res) => {
+  res.json({ message: 'Autonomous agent requires separate background worker.' });
 });
 
 if (process.env.NODE_ENV !== 'production') {

@@ -1,9 +1,9 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { LessonPlan, BookContent, BookReaderContent } from "../types";
 
 // Use import.meta.env for Vite/Vercel deployments, fallback to process.env for AI Studio environment
 const apiKey = import.meta.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || "";
-const ai = new GoogleGenAI({ apiKey });
+const ai = new GoogleGenerativeAI(apiKey);
 
 function getBackendUrl() {
   const savedKeysRaw = localStorage.getItem('ai_api_keys');
@@ -11,7 +11,16 @@ function getBackendUrl() {
     const keys = JSON.parse(savedKeysRaw);
     if (keys.backend_url) return keys.backend_url;
   }
-  return import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
+
+  // If we have an environment variable, use it.
+  if (import.meta.env.VITE_BACKEND_URL) return import.meta.env.VITE_BACKEND_URL;
+
+  // If we're in production (Vercel), use the current origin.
+  // The vercel.json rewrites will handle routing /api and /health to the server.
+  if (import.meta.env.PROD) return window.location.origin;
+
+  // Default for local development
+  return 'http://localhost:3001';
 }
 
 /**
@@ -23,7 +32,9 @@ async function callAgentAPI(params: {
   system?: string,
   agent?: string,
   jsonMode?: boolean,
-  pdfBase64?: string
+  pdfBase64?: string,
+  pdfPath?: string,
+  pdfPaths?: string[]
 }): Promise<any> {
   const agent = params.agent || 'gemini';
 
@@ -31,28 +42,34 @@ async function callAgentAPI(params: {
   const savedKeysRaw = localStorage.getItem('ai_api_keys');
   const userKeys = savedKeysRaw ? JSON.parse(savedKeysRaw) : {};
 
-  // If it's gemini and we have a user key, or it's standard call without PDF
-  if (agent === 'gemini' && !params.pdfBase64) {
-    const geminiKey = userKeys.gemini || apiKey;
-    const userAI = new GoogleGenAI(geminiKey);
-    const model = userAI.getGenerativeModel({
-      model: "gemini-1.5-flash",
-      systemInstruction: params.system
-    });
-    const result = await model.generateContent(params.prompt);
-    return result.response;
+  // If we're on a browser and it's a simple text task with a user key,
+  // try calling Gemini directly to reduce backend load and potential 500s.
+  if (agent === 'gemini' && !params.pdfBase64 && !params.pdfPath && !params.pdfPaths && userKeys.gemini) {
+    try {
+      const { GoogleGenerativeAI } = await import("@google/generative-ai");
+      const userAI = new GoogleGenerativeAI(userKeys.gemini);
+      const model = userAI.getGenerativeModel({
+        model: "gemini-1.5-flash",
+        systemInstruction: params.system
+      });
+      const result = await model.generateContent(params.prompt);
+      const response = await result.response;
+      let text = response.text();
+
+      if (params.jsonMode) {
+        const match = text.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
+        if (match) text = match[0];
+      }
+      return { text: () => text };
+    } catch (directErr) {
+      console.warn("Direct Gemini call failed, falling back to backend proxy", directErr);
+    }
   }
 
   // Inject user keys into params for backend proxy
   const paramsWithKeys = {
     ...params,
-    userKeys: {
-      gemini: userKeys.gemini,
-      groq: userKeys.groq,
-      huggingface: userKeys.huggingface,
-      ollama_url: userKeys.ollama_url,
-      ollama_model: userKeys.ollama_model
-    }
+    userKeys
   };
 
   // Otherwise, call the backend proxy
@@ -82,14 +99,11 @@ async function callAgentAPI(params: {
  */
 async function callGeminiWithRetry(params: any, maxRetries = 3): Promise<any> {
   let lastError: any;
+  const model = ai.getGenerativeModel({ model: params.model || "gemini-1.5-flash" });
 
   for (let i = 0; i < maxRetries; i++) {
     try {
-      // Compatibility with old calls
-      if (params.model?.includes('gemini-3')) {
-         params.model = 'gemini-1.5-pro';
-      }
-      return await ai.models.generateContent(params);
+      return await model.generateContent(params.contents);
     } catch (error: any) {
       lastError = error;
 
@@ -117,10 +131,11 @@ async function callGeminiWithRetry(params: any, maxRetries = 3): Promise<any> {
 /**
  * First step: Extract the Table of Contents from the PDF
  */
-export async function extractTOC(pdfBase64: string): Promise<any[]> {
+export async function extractTOC(pdfBase64?: string, pdfPath?: string): Promise<any[]> {
   const response = await callAgentAPI({
     agent: "gemini", // Extraction usually needs multimodal
     pdfBase64: pdfBase64,
+    pdfPath: pdfPath,
     jsonMode: true,
     prompt: `Extract the Table of Contents from this textbook PDF.
             Identify every Unit, Chapter, and Lesson.
@@ -142,10 +157,11 @@ export async function extractTOC(pdfBase64: string): Promise<any[]> {
  * Unified extraction for both Lesson Planning and Reader
  * Processes the book in chunks based on TOC to ensure no topic is missed.
  */
-export async function unifiedBookExtraction(pdfBase64: string, tocItem: any): Promise<Partial<BookContent>> {
+export async function unifiedBookExtraction(pdfBase64?: string, tocItem?: any, pdfPath?: string): Promise<Partial<BookContent>> {
   const response = await callAgentAPI({
     agent: "gemini",
     pdfBase64: pdfBase64,
+    pdfPath: pdfPath,
     jsonMode: true,
     prompt: `You are an expert academic analyzer. Extract detailed content for the following section from this textbook.
             
@@ -180,28 +196,29 @@ export async function unifiedBookExtraction(pdfBase64: string, tocItem: any): Pr
 /**
  * Compatibility wrappers for existing code
  */
-export async function parseBookPDF(pdfBase64: string): Promise<Partial<BookContent>[]> {
+export async function parseBookPDF(pdfBase64?: string, pdfPath?: string): Promise<Partial<BookContent>[]> {
   // Legacy support - but we'll use the new unified method
-  const toc = await extractTOC(pdfBase64);
+  const toc = await extractTOC(pdfBase64, pdfPath);
   const results: Partial<BookContent>[] = [];
 
   // Process every item from the TOC to ensure nothing is missed
   for (const item of toc) {
-    const details = await unifiedBookExtraction(pdfBase64, item);
+    const details = await unifiedBookExtraction(pdfBase64, item, pdfPath);
     results.push(details);
   }
   return results;
 }
 
-export async function extractFullBookReaderContent(pdfBase64: string): Promise<Partial<BookReaderContent>[]> {
+export async function extractFullBookReaderContent(pdfBase64?: string, pdfPath?: string): Promise<Partial<BookReaderContent>[]> {
   // Now returns the same unified data
-  return parseBookPDF(pdfBase64) as Promise<Partial<BookReaderContent>[]>;
+  return parseBookPDF(pdfBase64, pdfPath) as Promise<Partial<BookReaderContent>[]>;
 }
 
-export async function identifyBookMetadata(filename: string, pdfBase64?: string): Promise<{ title: string, subject: string, class: string }> {
+export async function identifyBookMetadata(filename: string, pdfBase64?: string, pdfPath?: string): Promise<{ title: string, subject: string, class: string }> {
   const response = await callAgentAPI({
     agent: "gemini",
     pdfBase64: pdfBase64,
+    pdfPath: pdfPath,
     jsonMode: true,
     prompt: `Identify the Grade/Class, Subject, and a clean Title for this textbook.
       
@@ -324,10 +341,11 @@ export async function generatePlanFromContent(content: BookContent, subject: str
   }
 }
 
-export async function generatePlanFromPDFAndTopic(pdfBase64: string, content: BookContent, subject: string, className: string, targetLanguage: string = 'English', agent: string = 'gemini'): Promise<LessonPlan> {
+export async function generatePlanFromPDFAndTopic(pdfBase64?: string, content?: BookContent, subject?: string, className?: string, targetLanguage: string = 'English', agent: string = 'gemini', pdfPath?: string): Promise<LessonPlan> {
   const response = await callAgentAPI({
     agent,
     pdfBase64,
+    pdfPath,
     jsonMode: true,
     prompt: `Study the provided textbook PDF and generate a detailed lesson plan for the specific topic below.
             IMPORTANT: Generate the entire lesson plan in ${targetLanguage}. 
@@ -392,7 +410,7 @@ export async function generateMCQs(content: BookContent, count: number = 5, agen
 
 export async function generateLessonPlansFromPDF(pdfBase64: string): Promise<LessonPlan[]> {
   const response = await callGeminiWithRetry({
-    model: "gemini-3-flash-preview",
+    model: "gemini-1.5-flash",
     contents: [
       {
         parts: [

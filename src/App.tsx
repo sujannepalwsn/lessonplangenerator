@@ -94,11 +94,17 @@ export default function App() {
   const checkBackendHealth = async () => {
     try {
       const savedKeysRaw = localStorage.getItem('ai_api_keys');
-      let url = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
+      let url = import.meta.env.VITE_BACKEND_URL;
+
       if (savedKeysRaw) {
         const keys = JSON.parse(savedKeysRaw);
         if (keys.backend_url) url = keys.backend_url;
       }
+
+      if (!url) {
+        url = import.meta.env.PROD ? window.location.origin : 'http://localhost:3001';
+      }
+
       const response = await fetch(`${url}/health`).catch(() => null);
       setIsBackendOnline(!!response?.ok);
     } catch {
@@ -575,62 +581,61 @@ export default function App() {
 
   const analyzeExistingBook = async (book: Book) => {
     if (!book.file_path) return;
-    setBookToAnalyze(book);
-    navigate('/analyze');
     setIsProcessing(true);
+    setBulkTotal(0);
+    setBulkProgress(0);
     setError(null);
-    setParsedContents([]);
-    setParsedReaderContents([]);
+    setSuccess(null);
 
     try {
+      const savedKeysRaw = localStorage.getItem('ai_api_keys');
+      const userKeys = savedKeysRaw ? JSON.parse(savedKeysRaw) : {};
+
+      let backendUrl = userKeys.backend_url || import.meta.env.VITE_BACKEND_URL;
+      if (!backendUrl) {
+        backendUrl = import.meta.env.PROD ? window.location.origin : 'http://localhost:3001';
+      }
+
+      // 1. Extract TOC (Fast)
+      const tocResponse = await fetch(`${backendUrl}/api/analyze/toc`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pdfPath: book.file_path, userKeys })
+      });
+
+      if (!tocResponse.ok) throw new Error('Failed to extract Table of Contents');
+      const { toc } = await tocResponse.json();
+
+      setBulkTotal(toc.length);
+
+      // Clear existing contents for this book before bulk insert
       const supabase = getSupabase();
-      
-      // 1. Download file from storage
-      const { data, error: downloadError } = await supabase.storage
-        .from('books')
-        .download(book.file_path);
+      await supabase.from('book_contents').delete().eq('book_id', book.id);
 
-      if (downloadError) throw downloadError;
+      // 2. Extract each topic individually (to avoid Vercel timeouts)
+      for (let i = 0; i < toc.length; i++) {
+        setBulkProgress(i + 1);
+        const topicResponse = await fetch(`${backendUrl}/api/analyze/topic`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            bookId: book.id,
+            pdfPath: book.file_path,
+            tocItem: toc[i],
+            userKeys
+          })
+        });
 
-      // 2. Convert blob to base64
-      const reader = new FileReader();
-      reader.readAsDataURL(data);
-      reader.onload = async () => {
-        try {
-          const base64 = (reader.result as string).split(',')[1];
+        if (!topicResponse.ok) console.warn(`Failed to analyze topic: ${toc[i].topic}`);
+      }
 
-          // 3. New TOC-First Unified Extraction
-          const toc = await extractTOC(base64);
-          setBulkTotal(toc.length);
-          setBulkProgress(0);
-
-          const allExtracted: Partial<BookContent>[] = [];
-
-          for (let i = 0; i < toc.length; i++) {
-            setBulkProgress(i + 1);
-            try {
-              const details = await unifiedBookExtraction(base64, toc[i]);
-              allExtracted.push(details);
-              // Update state incrementally so user sees progress
-              setParsedContents([...allExtracted]);
-            } catch (err) {
-              console.error(`Failed to extract topic ${i}:`, err);
-            }
-          }
-
-          setParsedContents(allExtracted);
-          setParsedReaderContents(allExtracted as Partial<BookReaderContent>[]);
-          setIsProcessing(false);
-          setSuccess(`Successfully extracted ${allExtracted.length} topics from "${book.title}"!`);
-        } catch (err) {
-          console.error(err);
-          setError('An error occurred while analyzing the book.');
-          setIsProcessing(false);
-        }
-      };
+      setSuccess(`Analysis complete for "${book.title}"! ${toc.length} topics extracted.`);
+      fetchAllBooks();
+      fetchGrades();
     } catch (err) {
       console.error(err);
-      setError('Failed to retrieve book for analysis.');
+      setError(err instanceof Error ? err.message : 'Failed to analyze book');
+    } finally {
       setIsProcessing(false);
     }
   };
@@ -809,23 +814,6 @@ export default function App() {
     try {
       const supabase = getSupabase();
       
-      // Get PDF base64 if available for better generation
-      let pdfBase64: string | null = null;
-      if (selectedBook.file_path) {
-        const { data: pdfBlob, error: downloadError } = await supabase.storage
-          .from('books')
-          .download(selectedBook.file_path);
-
-        if (!downloadError) {
-          const reader = new FileReader();
-          pdfBase64 = await new Promise<string>((resolve, reject) => {
-            reader.onload = () => resolve((reader.result as string).split(',')[1]);
-            reader.onerror = reject;
-            reader.readAsDataURL(pdfBlob);
-          });
-        }
-      }
-
       for (let i = 0; i < availableTopics.length; i++) {
         const topic = availableTopics[i];
         setBulkProgress(i + 1);
@@ -839,8 +827,8 @@ export default function App() {
 
         let plan: LessonPlan;
         try {
-          if (pdfBase64) {
-            plan = await generatePlanFromPDFAndTopic(pdfBase64, topic, selectedSubject, selectedGrade, targetLanguage, selectedAgent);
+          if (selectedBook.file_path) {
+            plan = await generatePlanFromPDFAndTopic(undefined, topic, selectedSubject, selectedGrade, targetLanguage, selectedAgent, selectedBook.file_path);
           } else {
             plan = await generatePlanFromContent(topic, selectedSubject, selectedGrade, targetLanguage, selectedAgent);
           }
@@ -949,21 +937,8 @@ export default function App() {
       let plan: LessonPlan;
 
       if (forceRegenerate && selectedBook?.file_path) {
-        // "Study the document and regenerate"
-        const { data: pdfBlob, error: downloadError } = await supabase.storage
-          .from('books')
-          .download(selectedBook.file_path);
-
-        if (downloadError) throw downloadError;
-
-        const reader = new FileReader();
-        const pdfBase64 = await new Promise<string>((resolve, reject) => {
-          reader.onload = () => resolve((reader.result as string).split(',')[1]);
-          reader.onerror = reject;
-          reader.readAsDataURL(pdfBlob);
-        });
-
-        plan = await generatePlanFromPDFAndTopic(pdfBase64, content, selectedSubject, selectedGrade, targetLanguage, selectedAgent);
+        // "Study the document and regenerate" using pdfPath to avoid payload limits
+        plan = await generatePlanFromPDFAndTopic(undefined, content, selectedSubject, selectedGrade, targetLanguage, selectedAgent, selectedBook.file_path);
       } else {
         plan = await generatePlanFromContent(content, selectedSubject, selectedGrade, targetLanguage, selectedAgent);
       }
