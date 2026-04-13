@@ -1,0 +1,9 @@
+
+> pdf-ingestion-backend@1.0.0 dev
+> tsx watch index.ts
+
+Backend server running on http://localhost:3001
+Background worker started...
+5:27:58 AM [tsx] change in ./index.ts Restarting...
+cBackend server running on http://localhost:3001
+Background worker started...

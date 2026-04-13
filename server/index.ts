@@ -105,10 +105,44 @@ app.post('/api/chat', async (req, res) => {
       }
     }
 
+    // RAG Integration: If no PDF is provided but we have a bookId, search vector DB
+    let ragContext = textContext;
+    if (!ragContext && req.body.bookId) {
+      const genAI = new GoogleGenerativeAI(userKeys?.gemini || process.env.GEMINI_API_KEY!);
+      const embedModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
+      const embeddingResult = await embedModel.embedContent(prompt);
+      const embedding = embeddingResult.embedding.values;
+
+      const { data: matches, error: matchError } = await supabase.rpc('match_book_contents', {
+        query_embedding: embedding,
+        match_threshold: 0.5,
+        match_count: 5,
+        filter_book_id: req.body.bookId
+      });
+
+      if (!matchError && matches) {
+        ragContext = matches.map((m: any) => `[Topic: ${m.topic}]\n${m.content}`).join('\n\n');
+      }
+    }
+
+    // Include CDC Grid if applicable
+    if (req.body.subject && req.body.grade) {
+      const { data: grid } = await supabase
+        .from('cdc_grids')
+        .select('analyzed_data')
+        .eq('subject', req.body.subject)
+        .eq('class', req.body.grade)
+        .maybeSingle();
+
+      if (grid) {
+        ragContext = `CURRICULUM STANDARDS (CDC GRID):\n${JSON.stringify(grid.analyzed_data)}\n\n${ragContext}`;
+      }
+    }
+
     const response = await callGeminiBackend({
       prompt, system, jsonMode,
       apiKey: userKeys?.gemini,
-      textContext: textContext.slice(0, 40000)
+      textContext: ragContext.slice(0, 80000)
     });
 
     res.json({ response });
@@ -127,21 +161,37 @@ app.post('/api/analyze/toc', async (req, res) => {
     if (downloadError || !data) throw new Error('Failed to download PDF from storage. Check if file exists.');
 
     const buffer = Buffer.from(await data.arrayBuffer());
-    const pdfData = await pdf(buffer);
-    const fullText = pdfData.text;
 
-    const tocPrompt = `Extract the full Table of Contents from this textbook text.
+    // Use the robust pdfParser (Docling)
+    const fs = await import('fs');
+    const path = await import('path');
+    const { parsePdfToMarkdown } = await import('./services/pdfParser.js');
+
+    const tempDir = path.join(process.cwd(), 'temp');
+    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+    const tempPath = path.join(tempDir, `toc_${Date.now()}.pdf`);
+    fs.writeFileSync(tempPath, buffer);
+
+    const markdown = await parsePdfToMarkdown(tempPath);
+    fs.unlinkSync(tempPath);
+
+    const tocPrompt = `Extract the full Table of Contents from this textbook markdown.
     Identify every Unit, Chapter, and Lesson.
     Return ONLY a valid JSON array of objects: [{ "unit": string, "chapter": string, "lesson": string, "topic": string }]`;
 
     const response = await callGeminiBackend({
       prompt: tocPrompt,
-      textContext: fullText.slice(0, 80000),
+      textContext: markdown.slice(0, 50000),
       jsonMode: true,
       apiKey: userKeys?.gemini
     });
 
-    res.json({ toc: JSON.parse(response) });
+    try {
+      res.json({ toc: JSON.parse(response) });
+    } catch (parseError) {
+      console.error("Failed to parse TOC JSON:", response);
+      throw new Error("AI returned invalid Table of Contents data. Please try again.");
+    }
   } catch (error: any) {
     console.error("TOC error:", error);
     res.status(500).json({ error: error.message || "Unknown error during TOC extraction" });
@@ -157,16 +207,28 @@ app.post('/api/analyze/topic', async (req, res) => {
     if (downloadError || !data) throw new Error('Failed to download PDF');
 
     const buffer = Buffer.from(await data.arrayBuffer());
-    const pdfData = await pdf(buffer);
 
-    const detailPrompt = `You are an expert academic analyzer. Extract detailed content for the following section from this textbook text.
+    // Use the robust pdfParser (Docling)
+    const fs = await import('fs');
+    const path = await import('path');
+    const { parsePdfToMarkdown } = await import('./services/pdfParser.js');
+
+    const tempDir = path.join(process.cwd(), 'temp');
+    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+    const tempPath = path.join(tempDir, `topic_${Date.now()}.pdf`);
+    fs.writeFileSync(tempPath, buffer);
+
+    const markdown = await parsePdfToMarkdown(tempPath);
+    fs.unlinkSync(tempPath);
+
+    const detailPrompt = `You are an expert academic analyzer. Extract detailed content for the following section from this textbook markdown.
 
     SECTION:
     Unit: ${tocItem.unit}
-    Lesson/Topic: ${tocItem.topic}
+    Lesson/Topic: ${tocItem.topic || tocItem.lesson}
 
     REQUIREMENTS:
-    1. full_content: Capture the detailed academic text.
+    1. full_content: Capture the detailed academic text in Markdown.
     2. goals: Specific learning outcomes.
     3. key_points: Array of takeaways.
     4. examples: Array of illustrative examples.
@@ -175,30 +237,66 @@ app.post('/api/analyze/topic', async (req, res) => {
 
     const response = await callGeminiBackend({
       prompt: detailPrompt,
-      textContext: pdfData.text,
+      textContext: markdown.slice(0, 100000),
       jsonMode: true,
       apiKey: userKeys?.gemini
     });
 
-    const details = JSON.parse(response);
-    const content = { ...tocItem, ...details, book_id: bookId };
+    try {
+      const details = JSON.parse(response);
+      const content = { ...tocItem, ...details, book_id: bookId };
 
-    await supabase.from('book_contents').upsert([content], { onConflict: 'book_id,topic' });
-    res.json({ success: true });
+      await supabase.from('book_contents').upsert([content], { onConflict: 'book_id,topic' });
+      res.json({ success: true });
+    } catch (parseError) {
+      console.error("Failed to parse topic JSON:", response);
+      throw new Error("AI returned invalid content data for this topic.");
+    }
   } catch (error: any) {
     console.error("Topic error:", error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// Minimal proxy for autonomous agent if needed
+app.get('/api/autonomous/status', async (req, res) => {
+  const { data: iteration } = await supabase
+    .from('iteration_status')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .single();
+
+  const { data: logs } = await supabase
+    .from('agent_logs')
+    .select('*')
+    .eq('iteration_id', iteration?.id)
+    .order('created_at', { ascending: false })
+    .limit(20);
+
+  res.json({
+    status: iteration?.status || 'idle',
+    iteration: iteration,
+    logs: logs || []
+  });
+});
+
 app.post('/api/autonomous/start', async (req, res) => {
-  res.json({ message: 'Autonomous agent requires separate background worker.' });
+  const { url, userKeys } = req.body;
+  const { runAutonomousIngestion } = await import('./services/orchestrator.js');
+
+  // Start ingestion in the background
+  runAutonomousIngestion(url, userKeys).catch(console.error);
+
+  res.json({ message: 'Autonomous ingestion started' });
 });
 
 if (process.env.NODE_ENV !== 'production') {
-  app.listen(port, () => {
+  app.listen(port, async () => {
     console.log(`Backend server running on http://localhost:${port}`);
+
+    // Start the background worker
+    const { startWorker } = await import('./services/worker.js');
+    startWorker().catch(err => console.error("Worker failed to start:", err));
   });
 }
 
