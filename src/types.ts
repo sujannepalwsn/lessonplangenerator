@@ -15,17 +15,25 @@ export interface BookContent {
   lesson: string;
   topic: string;
   sub_topic?: string;
-  content: string; // Summary for lesson planning
-  full_content?: string; // High-fidelity content for the reader
+  content: string;
   goals: string;
-  key_points?: string[];
-  examples?: string[];
-  formulas?: string[];
-  page_number?: number;
   created_at?: string;
 }
 
-export interface BookReaderContent extends BookContent {}
+export interface BookReaderContent {
+  id?: string;
+  book_id: string;
+  unit: string;
+  chapter?: string;
+  lesson: string;
+  topic: string;
+  sub_topic?: string;
+  full_content: string; // High-fidelity content for the reader
+  key_points: string[];
+  examples: string[];
+  formulas?: string[];
+  created_at?: string;
+}
 
 export interface LessonPlan {
   id?: string;

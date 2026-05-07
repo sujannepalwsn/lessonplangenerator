@@ -3,18 +3,33 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Routes, Route, Link, NavLink, useNavigate, useLocation, Navigate } from 'react-router-dom';
-import { Upload, FileText, Loader2, Save, CheckCircle2, AlertCircle, ChevronDown, ChevronUp, Printer, BookOpen, Sparkles, List, GraduationCap, Book as BookIcon, Folder, RefreshCw, Trash2, Eye, Copy, Search, X, Menu, Link as LinkIcon, ChevronLeft, ChevronRight, Layers, Activity, Settings as SettingsIcon } from 'lucide-react';
+import { 
+  Upload, FileText, Loader2, Save, CheckCircle2, AlertCircle, 
+  ChevronDown, ChevronUp, Printer, BookOpen, Sparkles, List, 
+  GraduationCap, Book as BookIcon, Folder, RefreshCw, Trash2, 
+  Eye, Copy, Search, X, Menu, Link as LinkIcon, ChevronLeft, 
+  ChevronRight, Layers, Globe, Bot, Target, MessageSquare, 
+  AlertTriangle, Zap 
+} from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { parseBookPDF, generatePlanFromContent, generatePlanFromPDFAndTopic, answerQuestionFromBook, searchBookContents, extractFullBookReaderContent, identifyBookMetadata, extractTOC, unifiedBookExtraction } from './services/geminiService';
-import { AutonomousDashboard } from './components/AutonomousDashboard';
-import { ExamGenerator } from './components/ExamGenerator';
-import { MCQGenerator } from './components/MCQGenerator';
-import { Settings } from './components/Settings';
+import { 
+  parseBookPDF, generatePlanFromContent, generatePlanFromPDFAndTopic, 
+  answerQuestionFromBook, searchBookContents, extractFullBookReaderContent, 
+  identifyBookMetadata, identifyPDFLinks 
+} from './services/geminiService';
 import { getSupabase } from './lib/supabase';
 import { LessonPlan, Book, BookContent, BookReaderContent } from './types';
 import { cn } from './lib/utils';
+
+// New Components
+import Header from './components/Header';
+import ApiKeyManager from './components/ApiKeyManager';
+import AgentLogTable from './components/AgentLogTable';
+import CrawlerSection from './components/CrawlerSection';
+import UploadSection from './components/UploadSection';
+import LibrarySection from './components/LibrarySection';
 
 export default function App() {
   const navigate = useNavigate();
@@ -39,8 +54,15 @@ export default function App() {
   const [bookUrl, setBookUrl] = useState('');
   const [bulkUrls, setBulkUrls] = useState('');
   const [isBulkMode, setIsBulkMode] = useState(false);
+  const [isCrawlerMode, setIsCrawlerMode] = useState(false);
+  const [crawlerUrl, setCrawlerUrl] = useState('');
+  const [isCrawling, setIsCrawling] = useState(false);
   const [currentReaderPageIndex, setCurrentReaderPageIndex] = useState(0);
+  const [activeRole, setActiveRole] = useState<'Admin' | 'Center' | 'Teacher' | 'Parent'>('Teacher');
+  const [activeTab, setActiveTab] = useState<'upload' | 'library' | 'generator' | 'grading' | 'personalized' | 'warning'>('library');
   const [allBooks, setAllBooks] = useState<Book[]>([]);
+  const [isLoadingLibrary, setIsLoadingLibrary] = useState(false);
+  const [supabaseError, setSupabaseError] = useState<string | null>(null);
   
   // Selector State
   const [availableGrades, setAvailableGrades] = useState<string[]>([]);
@@ -54,12 +76,9 @@ export default function App() {
   const [selectedBook, setSelectedBook] = useState<Book | null>(null);
   const [selectedTopic, setSelectedTopic] = useState<BookContent | null>(null);
   const [targetLanguage, setTargetLanguage] = useState<string>('English');
-  const [selectedAgent, setSelectedAgent] = useState<string>(() => localStorage.getItem('preferred_agent') || 'gemini');
-  const [isBackendOnline, setIsBackendOnline] = useState<boolean | null>(null);
   const [viewingPdfUrl, setViewingPdfUrl] = useState<string | null>(null);
   const [viewingPlan, setViewingPlan] = useState<LessonPlan | null>(null);
   const [generatedTopicIds, setGeneratedTopicIds] = useState<Set<string>>(new Set());
-  const [isBulkGeneratingMCQs, setIsBulkGeneratingMCQs] = useState(false);
 
   // Filters for Lesson Plans tab
   const [filterGrade, setFilterGrade] = useState<string>('');
@@ -80,39 +99,43 @@ export default function App() {
 
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [showApiManager, setShowApiManager] = useState(false);
+
+  // --- AGENT EVENT LOGGING ---
+  interface AgentLog {
+    id: string;
+    timestamp: string;
+    event: string;
+    status: 'info' | 'success' | 'warning' | 'error';
+    agent: string;
+  }
+  const [agentLogs, setAgentLogs] = useState<AgentLog[]>([]);
+  
+  // --- SUPERVISOR STATE ---
+  const [isGeminiExhausted, setIsGeminiExhausted] = useState(false);
+  const [activeAgent, setActiveAgent] = useState<'Gemini' | 'FreeAgent'>('Gemini');
+
+  const addLog = useCallback((event: string, status: AgentLog['status'] = 'info', agentName: string = activeAgent) => {
+    const newLog: AgentLog = {
+      id: Math.random().toString(36).substring(7),
+      timestamp: new Date().toLocaleTimeString(),
+      event,
+      status,
+      agent: agentName
+    };
+    setAgentLogs(prev => [newLog, ...prev].slice(0, 50)); // Keep last 50 logs
+  }, [activeAgent]);
 
   // Initial fetch for grades
   useEffect(() => {
     fetchGrades();
     fetchHistory();
     fetchAllBooks();
-    checkBackendHealth();
-    const interval = setInterval(checkBackendHealth, 5000);
-    return () => clearInterval(interval);
   }, []);
 
-  const checkBackendHealth = async () => {
-    try {
-      const savedKeysRaw = localStorage.getItem('ai_api_keys');
-      let url = import.meta.env.VITE_BACKEND_URL;
-
-      if (savedKeysRaw) {
-        const keys = JSON.parse(savedKeysRaw);
-        if (keys.backend_url) url = keys.backend_url;
-      }
-
-      if (!url) {
-        url = import.meta.env.PROD ? window.location.origin : 'http://localhost:3001';
-      }
-
-      const response = await fetch(`${url}/health`).catch(() => null);
-      setIsBackendOnline(!!response?.ok);
-    } catch {
-      setIsBackendOnline(false);
-    }
-  };
-
   const fetchAllBooks = async () => {
+    setIsLoadingLibrary(true);
+    setSupabaseError(null);
     try {
       const supabase = getSupabase();
       const { data, error } = await supabase
@@ -121,8 +144,14 @@ export default function App() {
         .order('class', { ascending: true });
       if (error) throw error;
       setAllBooks(data || []);
+      addLog(`Library: Fetched ${data?.length || 0} books`, 'success', 'Database');
     } catch (err) {
       console.error('Fetch all books error:', err);
+      const msg = err instanceof Error ? err.message : String(err);
+      setSupabaseError(msg);
+      addLog(`Library Error: ${msg}`, 'error', 'Database');
+    } finally {
+      setIsLoadingLibrary(false);
     }
   };
 
@@ -164,8 +193,11 @@ export default function App() {
       if (error) throw error;
       const uniqueGrades = Array.from(new Set(data?.map(b => b.class))).filter(Boolean).sort();
       setAvailableGrades(uniqueGrades);
+      addLog(`Database: Fetched unique grades: ${uniqueGrades.join(', ')}`, 'info', 'Database');
     } catch (err) {
       console.error('Grades fetch error:', err);
+      const msg = err instanceof Error ? err.message : String(err);
+      addLog(`Database Error (Grades): ${msg}`, 'error', 'Database');
     }
   };
 
@@ -202,7 +234,7 @@ export default function App() {
       const supabase = getSupabase();
       const { data: topics, error: topicsError } = await supabase
         .from('book_contents')
-        .select('*')
+        .select('id, book_id, unit, chapter, lesson, topic, sub_topic, content, goals, created_at')
         .eq('book_id', bookId)
         .order('created_at', { ascending: true });
       
@@ -211,7 +243,21 @@ export default function App() {
         throw topicsError;
       }
       setAvailableTopics(topics || []);
-      setAvailableReaderContents(topics || []); // Use the same data for reader
+
+      // Fetch reader contents
+      const { data: readerContents, error: readerError } = await supabase
+        .from('book_reader_contents')
+        .select('*')
+        .eq('book_id', bookId)
+        .order('created_at', { ascending: true });
+      
+      if (readerError) {
+        console.warn('Error fetching book_reader_contents (Table might not exist yet):', readerError);
+        setAvailableReaderContents([]);
+      } else {
+        console.log(`Fetched ${readerContents?.length || 0} reader sections for book ${bookId}`);
+        setAvailableReaderContents(readerContents || []);
+      }
 
       if (topics && topics.length > 0) {
         const topicIds = topics.map(t => t.id);
@@ -233,6 +279,7 @@ export default function App() {
 
   const fetchHistory = async () => {
     try {
+      console.log('Fetching lesson plan history...');
       const supabase = getSupabase();
       const { data, error } = await supabase
         .from('lesson_plans')
@@ -262,30 +309,97 @@ export default function App() {
           chapter
         `)
         .order('created_at', { ascending: false });
-      if (error) throw error;
+      
+      if (error) {
+        console.error('Supabase error in fetchHistory:', error);
+        throw error;
+      }
+      
+      console.log(`Fetched ${data?.length || 0} lesson plans successfully.`);
       setPlanHistory(data || []);
     } catch (err) {
-      console.error('History fetch error:', err);
+      console.error('History fetch error details:', err);
     }
   };
 
-  // Automatically set title from URL if no file is selected
+  // Automatically set metadata from URL or File
   useEffect(() => {
-    if (bookUrl && !file && !overwriteMode) {
-      const fileName = bookUrl.split('/').pop() || '';
-      if (fileName && fileName.toLowerCase().includes('.pdf')) {
-        const title = decodeURIComponent(fileName)
-          .split('?')[0] // Remove query params
-          .replace('.pdf', '')
-          .replace(/_/g, ' ')
-          .replace(/-/g, ' ')
-          .trim();
-        if (title) {
-          setBookMetadata(prev => ({ ...prev, title }));
+    const detectMetadata = async () => {
+      if (overwriteMode) return;
+
+      let sourceName = '';
+      let blob: Blob | null = null;
+
+      if (file) {
+        sourceName = file.name;
+        blob = file;
+      } else if (bookUrl) {
+        const fileName = bookUrl.split('/').pop() || '';
+        if (fileName && fileName.toLowerCase().includes('.pdf')) {
+          sourceName = decodeURIComponent(fileName).split('?')[0];
         }
       }
+
+      if (sourceName) {
+        try {
+          let base64: string | undefined;
+          if (blob) {
+            const reader = new FileReader();
+            const firstPart = blob.slice(0, 1024 * 1024); // First 1MB
+            base64 = await new Promise<string>((resolve) => {
+              reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
+              reader.readAsDataURL(firstPart);
+            });
+          }
+          
+          if (!isGeminiExhausted) {
+            try {
+              const identified = await identifyBookMetadata(sourceName, base64);
+              setBookMetadata(prev => ({
+                title: prev.title || identified.title || sourceName.replace('.pdf', ''),
+                subject: prev.subject || identified.subject || '',
+                class: prev.class || identified.class || ''
+              }));
+              setActiveAgent('Gemini');
+            } catch (err: any) {
+              if (err?.status === 429 || err?.message?.includes('429')) {
+                setIsGeminiExhausted(true);
+                throw err;
+              }
+              throw err;
+            }
+          } else {
+            // Use Free Agent Metadata
+            if (base64) {
+              const response = await fetch('/api/free-agent/metadata', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pdfBase64: base64, filename: sourceName })
+              });
+              if (response.ok) {
+                const data = await response.json();
+                setBookMetadata(prev => ({
+                  title: prev.title || data.metadata.title,
+                  subject: prev.subject || data.metadata.subject,
+                  class: prev.class || data.metadata.class
+                }));
+                setActiveAgent('FreeAgent');
+              }
+            }
+          }
+        } catch (err) {
+          console.warn("Auto-metadata detection failed", err);
+          // Fallback to simple title extraction
+          const title = sourceName.replace('.pdf', '').replace(/_/g, ' ').replace(/-/g, ' ').trim();
+          setBookMetadata(prev => ({ ...prev, title: prev.title || title }));
+        }
+      }
+    };
+
+    if ((file || bookUrl) && !overwriteMode) {
+      detectMetadata();
     }
-  }, [bookUrl, file, overwriteMode]);
+  }, [bookUrl, file, overwriteMode, isGeminiExhausted]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -398,9 +512,16 @@ export default function App() {
           .maybeSingle();
 
         if (existingBook) {
-          bookId = existingBook.id;
-          isOverwrite = true;
-          oldFilePath = existingBook.file_path;
+          if (overwriteMode) {
+            bookId = existingBook.id;
+            isOverwrite = true;
+            oldFilePath = existingBook.file_path;
+          } else {
+            // Not in overwrite mode, and book exists - skip/warn
+            setSuccess('This book is already in your library! No changes made.');
+            setIsProcessing(false);
+            return;
+          }
         } else {
           const { data: newBook, error: bookError } = await supabase
             .from('books')
@@ -494,6 +615,8 @@ export default function App() {
       const customSubject = parts[2];
       const customTitle = parts[3];
 
+      addLog(`Processing book ${i + 1}/${lines.length}: ${url.split('/').pop() || url}`, 'info');
+
       try {
         setBulkProgress(i + 1);
         
@@ -507,6 +630,7 @@ export default function App() {
           .trim() || `Book ${i + 1}`;
 
         // Download
+        addLog("Downloading PDF file...", 'info');
         let response;
         try {
           response = await fetch(url);
@@ -526,7 +650,9 @@ export default function App() {
 
         // Only use AI if we are missing critical info and user didn't provide it in the line
         if ((!customGrade || !customSubject || !customTitle) && !bookMetadata.subject && !bookMetadata.class) {
+          addLog("Analyzing PDF for metadata...", 'info');
           try {
+            // Convert first 1MB of blob to base64 for metadata identification
             const reader = new FileReader();
             const firstPart = blob.slice(0, 1024 * 1024); // First 1MB
             const base64 = await new Promise<string>((resolve) => {
@@ -534,17 +660,77 @@ export default function App() {
               reader.readAsDataURL(firstPart);
             });
             
-            const identified = await identifyBookMetadata(fileName, base64);
-            metadata = {
-              title: customTitle || identified.title || fallbackTitle,
-              subject: customSubject || bookMetadata.subject || identified.subject || 'Unknown',
-              class: customGrade || bookMetadata.class || identified.class || 'General'
-            };
+            if (!isGeminiExhausted) {
+              try {
+                const identified = await identifyBookMetadata(fileName, base64);
+                metadata = {
+                  title: customTitle || identified.title || fallbackTitle,
+                  subject: customSubject || bookMetadata.subject || identified.subject || 'Unknown',
+                  class: customGrade || bookMetadata.class || identified.class || 'General'
+                };
+                setActiveAgent('Gemini');
+                addLog(`Gemini identified: ${metadata.title} (${metadata.class} ${metadata.subject})`, 'success', 'Gemini');
+              } catch (err: any) {
+                if (err?.status === 429 || err?.message?.includes('429')) {
+                  setIsGeminiExhausted(true);
+                  addLog("Gemini exhausted during metadata extraction. Falling back.", 'warning', 'Supervisor');
+                  throw err; // Trigger fallback below
+                }
+                throw err;
+              }
+            } else {
+              throw new Error("Gemini Exhausted");
+            }
           } catch (metaErr) {
-            console.warn("Metadata identification failed, using fallback", metaErr);
+            addLog("Using Free Agent for metadata extraction...", 'info', 'FreeAgent');
+            // Fallback to Free Agent Metadata API
+            try {
+              const reader = new FileReader();
+              const firstPart = blob.slice(0, 1024 * 1024);
+              const base64 = await new Promise<string>((resolve) => {
+                reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
+                reader.readAsDataURL(firstPart);
+              });
+
+              const response = await fetch('/api/free-agent/metadata', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pdfBase64: base64, filename: fileName })
+              });
+              
+              if (response.ok) {
+                const data = await response.json();
+                metadata = {
+                  title: customTitle || data.metadata.title || fallbackTitle,
+                  subject: customSubject || bookMetadata.subject || data.metadata.subject || 'Unknown',
+                  class: customGrade || bookMetadata.class || data.metadata.class || 'General'
+                };
+                setActiveAgent('FreeAgent');
+                addLog(`Free Agent identified: ${metadata.title}`, 'success', 'FreeAgent');
+              }
+            } catch (freeErr) {
+              addLog("Metadata extraction failed completely.", 'error');
+            }
           }
         }
 
+        // Check if already exists
+        addLog(`Checking if "${metadata.title}" exists in library...`, 'info', 'Database');
+        const { data: existing } = await supabase
+          .from('books')
+          .select('id')
+          .eq('title', metadata.title)
+          .eq('subject', metadata.subject)
+          .eq('class', metadata.class)
+          .maybeSingle();
+
+        if (existing) {
+          addLog(`Skipped: "${metadata.title}" is already in the library.`, 'warning', 'Database');
+          successCount++; // Count as success since it's already in the library
+          continue;
+        }
+
+        addLog(`Uploading "${metadata.title}" to storage...`, 'info', 'Database');
         const fileExt = 'pdf';
         const storageFileName = `${Math.random()}.${fileExt}`;
         const filePath = `${metadata.class}/${storageFileName}`;
@@ -555,6 +741,7 @@ export default function App() {
 
         if (uploadError) throw uploadError;
 
+        addLog("Saving book record to database...", 'info', 'Database');
         const { error: insertError } = await supabase
           .from('books')
           .insert({
@@ -565,9 +752,15 @@ export default function App() {
           });
 
         if (insertError) throw insertError;
+        addLog(`Successfully uploaded: ${metadata.title}`, 'success', 'Database');
         successCount++;
+
+        // Rate limiting: 1-3 sec delay between requests
+        const delay = Math.floor(Math.random() * 2000) + 1000;
+        addLog(`Waiting ${Math.round(delay/1000)}s before next upload...`, 'info');
+        await new Promise(r => setTimeout(r, delay));
       } catch (err) {
-        console.error(`Bulk upload failed for ${line}:`, err);
+        addLog(`Error processing ${url}: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error');
         failCount++;
       }
     }
@@ -575,67 +768,132 @@ export default function App() {
     setSuccess(`Bulk upload complete: ${successCount} successful, ${failCount} failed.`);
     setBulkUrls('');
     setIsProcessing(false);
+    setIsBulkMode(false);
     fetchAllBooks();
     fetchGrades();
   };
 
-  const analyzeExistingBook = async (book: Book) => {
-    if (!book.file_path) return;
-    setIsProcessing(true);
-    setBulkTotal(0);
-    setBulkProgress(0);
+  const crawlSiteForPDFs = async () => {
+    if (!crawlerUrl) return;
+    setIsCrawling(true);
     setError(null);
     setSuccess(null);
 
     try {
-      const savedKeysRaw = localStorage.getItem('ai_api_keys');
-      const userKeys = savedKeysRaw ? JSON.parse(savedKeysRaw) : {};
+      addLog(`Starting scan of ${crawlerUrl}...`, 'info');
+      let links: string[] = [];
+      
+      if (!isGeminiExhausted) {
+        try {
+          addLog("Fetching website content via proxy...", 'info', 'Gemini');
+          // 1. Fetch HTML via proxy
+          const response = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(crawlerUrl)}`);
+          if (!response.ok) throw new Error('Failed to fetch the website. Ensure the URL is correct and public.');
+          const html = await response.text();
 
-      let backendUrl = userKeys.backend_url || import.meta.env.VITE_BACKEND_URL;
-      if (!backendUrl) {
-        backendUrl = import.meta.env.PROD ? window.location.origin : 'http://localhost:3001';
+          addLog("Analyzing HTML for PDF links...", 'info', 'Gemini');
+          // 2. Extract links using Gemini
+          links = await identifyPDFLinks(html, crawlerUrl);
+          setActiveAgent('Gemini');
+        } catch (err: any) {
+          if (err?.status === 429 || err?.message?.includes('429') || err?.message?.includes('quota')) {
+            addLog("Gemini quota exhausted. Switching to Free Agent.", 'warning', 'Supervisor');
+            setIsGeminiExhausted(true);
+            setActiveAgent('FreeAgent');
+          } else {
+            addLog(`Gemini discovery failed: ${err.message}`, 'error', 'Gemini');
+            throw err;
+          }
+        }
       }
 
-      // 1. Extract TOC (Fast)
-      const tocResponse = await fetch(`${backendUrl}/api/analyze/toc`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pdfPath: book.file_path, userKeys })
-      });
-
-      if (!tocResponse.ok) throw new Error('Failed to extract Table of Contents');
-      const { toc } = await tocResponse.json();
-
-      setBulkTotal(toc.length);
-
-      // Clear existing contents for this book before bulk insert
-      const supabase = getSupabase();
-      await supabase.from('book_contents').delete().eq('book_id', book.id);
-
-      // 2. Extract each topic individually (to avoid Vercel timeouts)
-      for (let i = 0; i < toc.length; i++) {
-        setBulkProgress(i + 1);
-        const topicResponse = await fetch(`${backendUrl}/api/analyze/topic`, {
+      // Fallback to Free Agent Scraper
+      if (links.length === 0 || isGeminiExhausted) {
+        addLog("Using Free Agent Scraper (Cheerio)...", 'info', 'FreeAgent');
+        const response = await fetch('/api/free-agent/crawl', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            bookId: book.id,
-            pdfPath: book.file_path,
-            tocItem: toc[i],
-            userKeys
-          })
+          body: JSON.stringify({ url: crawlerUrl })
         });
-
-        if (!topicResponse.ok) console.warn(`Failed to analyze topic: ${toc[i].topic}`);
+        
+        if (!response.ok) throw new Error('Free Agent scraper failed.');
+        const data = await response.json();
+        links = data.links;
+        setActiveAgent('FreeAgent');
+      }
+      
+      if (links.length === 0) {
+        addLog("No PDF links found on this page.", 'warning');
+        throw new Error('The agents could not find any direct PDF links on this page.');
       }
 
-      setSuccess(`Analysis complete for "${book.title}"! ${toc.length} topics extracted.`);
-      fetchAllBooks();
-      fetchGrades();
+      // Record the scraped site in Supabase
+      try {
+        const supabase = getSupabase();
+        await supabase.from('scraped_sites').upsert([{ url: crawlerUrl, links_found: links.length, last_scraped_at: new Date().toISOString() }], { onConflict: 'url' });
+        addLog(`Recorded ${links.length} links from ${crawlerUrl} in history.`, 'success', 'Database');
+      } catch (dbErr) {
+        console.warn("Failed to record scraped site", dbErr);
+      }
+
+      addLog(`Discovery complete. Found ${links.length} links.`, 'success');
+      setBulkUrls(links.join('\n'));
+      setSuccess(`${activeAgent} found ${links.length} PDF links! Review them below.`);
+      setIsBulkMode(true);
+      setIsCrawlerMode(false);
     } catch (err) {
       console.error(err);
-      setError(err instanceof Error ? err.message : 'Failed to analyze book');
+      setError(err instanceof Error ? err.message : 'Crawler failed.');
     } finally {
+      setIsCrawling(false);
+    }
+  };
+
+  const analyzeExistingBook = async (book: Book) => {
+    if (!book.file_path) return;
+    setBookToAnalyze(book);
+    navigate('/analyze');
+    setIsProcessing(true);
+    setError(null);
+    setParsedContents([]);
+    setParsedReaderContents([]);
+
+    try {
+      const supabase = getSupabase();
+      
+      // 1. Download file from storage
+      const { data, error: downloadError } = await supabase.storage
+        .from('books')
+        .download(book.file_path);
+
+      if (downloadError) throw downloadError;
+
+      // 2. Convert blob to base64
+      const reader = new FileReader();
+      reader.readAsDataURL(data);
+      reader.onload = async () => {
+        try {
+          const base64 = (reader.result as string).split(',')[1];
+          
+          // Run both extractions in parallel
+          const [contents, readerContents] = await Promise.all([
+            parseBookPDF(base64),
+            extractFullBookReaderContent(base64)
+          ]);
+
+          setParsedContents(contents);
+          setParsedReaderContents(readerContents);
+          setIsProcessing(false);
+          setSuccess(`Successfully extracted ${contents.length} topics and ${readerContents.length} reader sections from "${book.title}"!`);
+        } catch (err) {
+          console.error(err);
+          setError('An error occurred while analyzing the book.');
+          setIsProcessing(false);
+        }
+      };
+    } catch (err) {
+      console.error(err);
+      setError('Failed to retrieve book for analysis.');
       setIsProcessing(false);
     }
   };
@@ -665,9 +923,15 @@ export default function App() {
 
       // 3. Delete existing contents for this book
       await supabase.from('book_contents').delete().eq('book_id', bookId);
+      await supabase.from('book_reader_contents').delete().eq('book_id', bookId);
       
-      // 4. Save new unified contents
+      // 4. Save new contents
       const contentsToSave = parsedContents.map(c => ({
+        ...c,
+        book_id: bookId
+      }));
+
+      const readerContentsToSave = parsedReaderContents.map(c => ({
         ...c,
         book_id: bookId
       }));
@@ -675,7 +939,12 @@ export default function App() {
       const { error: contentsError } = await supabase.from('book_contents').insert(contentsToSave);
       if (contentsError) throw contentsError;
 
-      setSuccess(`Successfully saved ${parsedContents.length} topics to "${bookToAnalyze.title}"!`);
+      if (readerContentsToSave.length > 0) {
+        const { error: readerError } = await supabase.from('book_reader_contents').insert(readerContentsToSave);
+        if (readerError) throw readerError;
+      }
+
+      setSuccess(`Successfully saved ${parsedContents.length} topics and ${parsedReaderContents.length} reader sections to "${bookToAnalyze.title}"!`);
       setParsedContents([]);
       setParsedReaderContents([]);
       setBookToAnalyze(null);
@@ -687,6 +956,13 @@ export default function App() {
       setIsProcessing(false);
     }
   };
+
+  const resetGemini = () => {
+    setIsGeminiExhausted(false);
+    setActiveAgent('Gemini');
+    addLog('Supervisor: Manually reset to Gemini agent', 'info');
+  };
+
 
   const deleteBook = async (bookId: string) => {
     if (!confirm('Are you sure you want to delete this book and all its contents?')) return;
@@ -756,52 +1032,6 @@ export default function App() {
     setViewingPdfUrl(null);
   };
 
-  const handleBulkMCQGenerate = async () => {
-    if (!selectedBook || availableTopics.length === 0) return;
-    setIsBulkGeneratingMCQs(true);
-    setBulkProgress(0);
-    setBulkTotal(availableTopics.length);
-    setError(null);
-    setSuccess(null);
-
-    try {
-      const supabase = getSupabase();
-      let totalSaved = 0;
-
-      for (let i = 0; i < availableTopics.length; i++) {
-        const topic = availableTopics[i];
-        setBulkProgress(i + 1);
-
-        try {
-          const mcqs = await generateMCQs(topic, 3, selectedAgent);
-          const toSave = mcqs.map(q => ({
-            book_id: selectedBook.id,
-            book_content_id: topic.id,
-            type: 'mcq',
-            question_text: q.question_text,
-            options: q.options,
-            correct_answer: q.correct_answer,
-            difficulty: q.difficulty || 'medium'
-          }));
-
-          const { error: saveError } = await supabase.from('questions').insert(toSave);
-          if (!saveError) totalSaved += mcqs.length;
-
-          await new Promise(r => setTimeout(r, 500));
-        } catch (err) {
-          console.error(`Failed MCQs for ${topic.topic}:`, err);
-        }
-      }
-
-      setSuccess(`Bulk MCQ generation complete! Saved ${totalSaved} questions.`);
-    } catch (err) {
-      console.error(err);
-      setError('Bulk MCQ generation failed.');
-    } finally {
-      setIsBulkGeneratingMCQs(false);
-    }
-  };
-
   const handleBulkGenerate = async () => {
     if (!selectedBook || availableTopics.length === 0) return;
     
@@ -814,6 +1044,23 @@ export default function App() {
     try {
       const supabase = getSupabase();
       
+      // Get PDF base64 if available for better generation
+      let pdfBase64: string | null = null;
+      if (selectedBook.file_path) {
+        const { data: pdfBlob, error: downloadError } = await supabase.storage
+          .from('books')
+          .download(selectedBook.file_path);
+        
+        if (!downloadError) {
+          const reader = new FileReader();
+          pdfBase64 = await new Promise<string>((resolve, reject) => {
+            reader.onload = () => resolve((reader.result as string).split(',')[1]);
+            reader.onerror = reject;
+            reader.readAsDataURL(pdfBlob);
+          });
+        }
+      }
+
       for (let i = 0; i < availableTopics.length; i++) {
         const topic = availableTopics[i];
         setBulkProgress(i + 1);
@@ -827,10 +1074,10 @@ export default function App() {
 
         let plan: LessonPlan;
         try {
-          if (selectedBook.file_path) {
-            plan = await generatePlanFromPDFAndTopic(undefined, topic, selectedSubject, selectedGrade, targetLanguage, selectedAgent, selectedBook.file_path);
+          if (pdfBase64) {
+            plan = await generatePlanFromPDFAndTopic(pdfBase64, topic, selectedSubject, selectedGrade, targetLanguage);
           } else {
-            plan = await generatePlanFromContent(topic, selectedSubject, selectedGrade, targetLanguage, selectedAgent);
+            plan = await generatePlanFromContent(topic, selectedSubject, selectedGrade, targetLanguage);
           }
 
           const planWithMetadata = {
@@ -937,10 +1184,23 @@ export default function App() {
       let plan: LessonPlan;
 
       if (forceRegenerate && selectedBook?.file_path) {
-        // "Study the document and regenerate" using pdfPath to avoid payload limits
-        plan = await generatePlanFromPDFAndTopic(undefined, content, selectedSubject, selectedGrade, targetLanguage, selectedAgent, selectedBook.file_path);
+        // "Study the document and regenerate"
+        const { data: pdfBlob, error: downloadError } = await supabase.storage
+          .from('books')
+          .download(selectedBook.file_path);
+        
+        if (downloadError) throw downloadError;
+
+        const reader = new FileReader();
+        const pdfBase64 = await new Promise<string>((resolve, reject) => {
+          reader.onload = () => resolve((reader.result as string).split(',')[1]);
+          reader.onerror = reject;
+          reader.readAsDataURL(pdfBlob);
+        });
+
+        plan = await generatePlanFromPDFAndTopic(pdfBase64, content, selectedSubject, selectedGrade, targetLanguage);
       } else {
-        plan = await generatePlanFromContent(content, selectedSubject, selectedGrade, targetLanguage, selectedAgent);
+        plan = await generatePlanFromContent(content, selectedSubject, selectedGrade, targetLanguage);
       }
       
       // Add metadata for the external system integration
@@ -1035,8 +1295,7 @@ export default function App() {
         contextToUse,
         selectedSubject,
         selectedGrade,
-        targetLanguage,
-        selectedAgent
+        targetLanguage
       );
       
       setQaAnswer(answer);
@@ -1168,142 +1427,25 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-30">
-        <div className="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between">
-          <Link to="/" className="flex items-center gap-2">
-            <div className="bg-indigo-600 p-2 rounded-lg"><FileText className="text-white w-5 h-5 sm:w-6 sm:h-6" /></div>
-            <h1 className="text-lg sm:text-xl font-bold tracking-tight text-slate-800">AI Lesson Planner</h1>
-          </Link>
-          
-          {/* Desktop Nav */}
-          <nav className="hidden md:flex bg-slate-100 p-1 rounded-lg">
-            <NavLink to="/" className={({isActive}) => cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", isActive ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Upload</NavLink>
-            <NavLink to="/books" className={({isActive}) => cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", isActive ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Books</NavLink>
-            <NavLink to="/generator" className={({isActive}) => cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", isActive ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Generator</NavLink>
-            <NavLink to="/reader" className={({isActive}) => cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", isActive ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Reader</NavLink>
-            <NavLink to="/qa" className={({isActive}) => cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", isActive ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Q&A</NavLink>
-            <NavLink to="/autonomous" className={({isActive}) => cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", isActive ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Autonomous</NavLink>
-            <NavLink to="/exams" className={({isActive}) => cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", isActive ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Exams</NavLink>
-            <NavLink to="/lesson-plans" className={({isActive}) => cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", isActive ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Lesson Plans</NavLink>
-            <NavLink to="/settings" className={({isActive}) => cn("px-4 py-1.5 rounded-md text-sm font-medium transition-all", isActive ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}>Settings</NavLink>
-          </nav>
+    <div className="min-h-screen bg-gray-50 text-gray-900 font-sans selection:bg-blue-100 selection:text-blue-900">
+      <Header 
+        isMenuOpen={isMenuOpen} 
+        setIsMenuOpen={setIsMenuOpen} 
+        activeAgent={activeAgent} 
+        isGeminiExhausted={isGeminiExhausted} 
+        resetGemini={resetGemini} 
+        onOpenApiManager={() => setShowApiManager(true)}
+        activeRole={activeRole}
+        setActiveRole={setActiveRole}
+      />
 
-          <div className="hidden lg:flex items-center gap-4 ml-4">
-            <div className={cn(
-              "px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-widest flex items-center gap-1",
-              isBackendOnline ? "bg-emerald-100 text-emerald-600" : "bg-red-100 text-red-600"
-            )}>
-              <div className={cn("w-1.5 h-1.5 rounded-full", isBackendOnline ? "bg-emerald-500" : "bg-red-500")}></div>
-              {isBackendOnline ? "Agent Online" : "Agent Offline"}
-            </div>
-            <div className="h-4 w-px bg-slate-200"></div>
-            <span className="text-[10px] font-bold text-slate-400 uppercase">Agent:</span>
-            <select
-              value={selectedAgent}
-              onChange={(e) => {
-                const val = e.target.value;
-                setSelectedAgent(val);
-                localStorage.setItem('preferred_agent', val);
-              }}
-              className="text-xs font-bold bg-slate-100 border-none rounded-lg px-2 py-1 outline-none text-indigo-600"
-            >
-              <option value="gemini">Gemini (Auto)</option>
-              <option value="groq">Groq (Llama 3)</option>
-              <option value="huggingface">HuggingFace</option>
-              <option value="ollama">Local Ollama</option>
-            </select>
-          </div>
+      <AnimatePresence>
+        {showApiManager && (
+          <ApiKeyManager onClose={() => setShowApiManager(false)} />
+        )}
+      </AnimatePresence>
 
-          {/* Mobile Menu Button */}
-          <button 
-            onClick={() => setIsMenuOpen(!isMenuOpen)}
-            className="md:hidden p-2 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-all"
-          >
-            {isMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
-          </button>
-        </div>
-
-        {/* Mobile Nav */}
-        <AnimatePresence>
-          {isMenuOpen && (
-            <motion.div 
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: 'auto' }}
-              exit={{ opacity: 0, height: 0 }}
-              className="md:hidden bg-white border-t border-slate-100 overflow-hidden"
-            >
-              <nav className="flex flex-col p-4 gap-2">
-                <NavLink 
-                  to="/" 
-                  onClick={() => setIsMenuOpen(false)}
-                  className={({isActive}) => cn("px-4 py-3 rounded-xl text-sm font-bold transition-all flex items-center gap-3", isActive ? "bg-indigo-50 text-indigo-600" : "text-slate-500 hover:bg-slate-50")}
-                >
-                  <Upload className="w-5 h-5" /> Upload
-                </NavLink>
-                <NavLink 
-                  to="/books" 
-                  onClick={() => setIsMenuOpen(false)}
-                  className={({isActive}) => cn("px-4 py-3 rounded-xl text-sm font-bold transition-all flex items-center gap-3", isActive ? "bg-indigo-50 text-indigo-600" : "text-slate-500 hover:bg-slate-50")}
-                >
-                  <BookIcon className="w-5 h-5" /> Books
-                </NavLink>
-                <NavLink 
-                  to="/generator" 
-                  onClick={() => setIsMenuOpen(false)}
-                  className={({isActive}) => cn("px-4 py-3 rounded-xl text-sm font-bold transition-all flex items-center gap-3", isActive ? "bg-indigo-50 text-indigo-600" : "text-slate-500 hover:bg-slate-50")}
-                >
-                  <Sparkles className="w-5 h-5" /> Generator
-                </NavLink>
-                <NavLink 
-                  to="/reader" 
-                  onClick={() => setIsMenuOpen(false)}
-                  className={({isActive}) => cn("px-4 py-3 rounded-xl text-sm font-bold transition-all flex items-center gap-3", isActive ? "bg-indigo-50 text-indigo-600" : "text-slate-500 hover:bg-slate-50")}
-                >
-                  <BookOpen className="w-5 h-5" /> Reader
-                </NavLink>
-                <NavLink 
-                  to="/qa" 
-                  onClick={() => setIsMenuOpen(false)}
-                  className={({isActive}) => cn("px-4 py-3 rounded-xl text-sm font-bold transition-all flex items-center gap-3", isActive ? "bg-indigo-50 text-indigo-600" : "text-slate-500 hover:bg-slate-50")}
-                >
-                  <Search className="w-5 h-5" /> Q&A
-                </NavLink>
-                <NavLink
-                  to="/autonomous"
-                  onClick={() => setIsMenuOpen(false)}
-                  className={({isActive}) => cn("px-4 py-3 rounded-xl text-sm font-bold transition-all flex items-center gap-3", isActive ? "bg-indigo-50 text-indigo-600" : "text-slate-500 hover:bg-slate-50")}
-                >
-                  <Activity className="w-5 h-5" /> Autonomous
-                </NavLink>
-                <NavLink
-                  to="/exams"
-                  onClick={() => setIsMenuOpen(false)}
-                  className={({isActive}) => cn("px-4 py-3 rounded-xl text-sm font-bold transition-all flex items-center gap-3", isActive ? "bg-indigo-50 text-indigo-600" : "text-slate-500 hover:bg-slate-50")}
-                >
-                  <FileText className="w-5 h-5" /> Exams
-                </NavLink>
-                <NavLink 
-                  to="/lesson-plans" 
-                  onClick={() => setIsMenuOpen(false)}
-                  className={({isActive}) => cn("px-4 py-3 rounded-xl text-sm font-bold transition-all flex items-center gap-3", isActive ? "bg-indigo-50 text-indigo-600" : "text-slate-500 hover:bg-slate-50")}
-                >
-                  <FileText className="w-5 h-5" /> Lesson Plans
-                </NavLink>
-                <NavLink
-                  to="/settings"
-                  onClick={() => setIsMenuOpen(false)}
-                  className={({isActive}) => cn("px-4 py-3 rounded-xl text-sm font-bold transition-all flex items-center gap-3", isActive ? "bg-indigo-50 text-indigo-600" : "text-slate-500 hover:bg-slate-50")}
-                >
-                  <SettingsIcon className="w-5 h-5" /> Settings
-                </NavLink>
-              </nav>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </header>
-
-      <main className="max-w-5xl mx-auto px-4 py-8">
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <AnimatePresence mode="wait">
           {error && <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="mb-6 p-4 bg-red-50 border border-red-100 text-red-600 rounded-xl flex items-center gap-3"><AlertCircle className="w-5 h-5" />{error}</motion.div>}
           {success && <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="mb-6 p-4 bg-emerald-50 border border-emerald-100 text-emerald-600 rounded-xl flex items-center gap-3"><CheckCircle2 className="w-5 h-5" />{success}</motion.div>}
@@ -1311,192 +1453,79 @@ export default function App() {
 
         <Routes>
           <Route path="/" element={
-            <section className="bg-white rounded-2xl border border-slate-200 p-8 shadow-sm max-w-4xl mx-auto">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-                <div>
-                  <h2 className="text-2xl font-bold text-slate-800">Upload Textbook</h2>
-                  <p className="text-slate-500">Extract lessons from PDF and store in database.</p>
-                </div>
-                <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-xl w-fit">
-                  <button 
-                    onClick={() => { setOverwriteMode(false); setIsBulkMode(false); }} 
-                    className={cn("px-4 py-1.5 rounded-lg text-sm font-bold transition-all", (!overwriteMode && !isBulkMode) ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500")}
-                  >
-                    New Book
-                  </button>
-                  <button 
-                    onClick={() => { setOverwriteMode(true); setIsBulkMode(false); }} 
-                    className={cn("px-4 py-1.5 rounded-lg text-sm font-bold transition-all", (overwriteMode && !isBulkMode) ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500")}
-                  >
-                    Overwrite
-                  </button>
-                  <button 
-                    onClick={() => { setIsBulkMode(true); setOverwriteMode(false); }} 
-                    className={cn("px-4 py-1.5 rounded-lg text-sm font-bold transition-all", isBulkMode ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500")}
-                  >
-                    Bulk Links
-                  </button>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
-                <div className="space-y-6">
-                  {isBulkMode ? (
-                    <div className="space-y-4">
-                      <div className="flex items-center gap-2 text-indigo-600 font-bold mb-2">
-                        <Layers className="w-5 h-5" />
-                        <span>Bulk URL Upload</span>
-                      </div>
-                      <textarea
-                        placeholder="Format: URL | Grade | Subject | Title (one per line)
-Example: https://site.com/book.pdf | 10 | Science | Physics Part 1"
-                        value={bulkUrls}
-                        onChange={(e) => setBulkUrls(e.target.value)}
-                        className="w-full h-64 p-4 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-mono text-sm"
-                      />
-                      <p className="text-xs text-slate-400 italic">
-                        Use the pipe symbol (|) to separate details. If you only provide the URL, AI will try to identify the rest.
-                      </p>
-                    </div>
-                  ) : (
-                    <>
-                      <div className="relative group">
-                        <input type="file" accept=".pdf" onChange={handleFileChange} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
-                        <div className={cn("border-2 border-dashed rounded-2xl p-10 transition-all flex flex-col items-center justify-center gap-4", file ? "border-indigo-400 bg-indigo-50" : "border-slate-300 group-hover:border-indigo-400 group-hover:bg-slate-50")}>
-                          <div className={cn("p-4 rounded-full", file ? "bg-indigo-100 text-indigo-600" : "bg-slate-100 text-slate-400")}><Upload className="w-8 h-8" /></div>
-                          <p className="font-bold text-slate-700 text-center">{file ? file.name : "Click or drag PDF here"}</p>
-                          <p className="text-xs text-slate-400 tracking-wide uppercase font-bold">PDF Format Only</p>
-                        </div>
-                      </div>
-
-                      <div className="relative">
-                        <div className="absolute inset-0 flex items-center" aria-hidden="true">
-                          <div className="w-full border-t border-slate-200"></div>
-                        </div>
-                        <div className="relative flex justify-center text-xs uppercase">
-                          <span className="bg-white px-2 text-slate-400 font-bold tracking-widest">OR PASTE URL</span>
-                        </div>
-                      </div>
-
-                      <div className="space-y-2">
-                        <div className="relative">
-                          <LinkIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                          <input 
-                            type="url" 
-                            placeholder="https://example.com/book.pdf" 
-                            value={bookUrl}
-                            onChange={e => {
-                              setBookUrl(e.target.value);
-                              if (e.target.value) setFile(null); // Clear file if URL is pasted
-                            }}
-                            className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                          />
-                        </div>
-                        <p className="text-[10px] text-slate-400 italic ml-1">Note: URL must be direct link to a public PDF file.</p>
-                      </div>
-                    </>
-                  )}
-
-                  {overwriteMode ? (
-                    <div className="space-y-4 bg-slate-50 p-6 rounded-2xl border border-slate-100">
-                      <h3 className="text-sm font-bold text-slate-500 uppercase flex items-center gap-2"><RefreshCw className="w-4 h-4" /> Select Book to Replace</h3>
-                      <div className="space-y-3">
-                        <select 
-                          value={selectedGrade} 
-                          onChange={e => setSelectedGrade(e.target.value)}
-                          className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                        >
-                          <option value="">-- Select Grade --</option>
-                          {availableGrades.map((g, i) => <option key={`up-g-${g}-${i}`} value={g}>{g}</option>)}
-                        </select>
-                        <select 
-                          value={selectedSubject} 
-                          onChange={e => setSelectedSubject(e.target.value)}
-                          disabled={!selectedGrade}
-                          className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:opacity-50"
-                        >
-                          <option value="">-- Select Subject --</option>
-                          {availableSubjects.map((s, i) => <option key={`up-s-${s}-${i}`} value={s}>{s}</option>)}
-                        </select>
-                        <select 
-                          value={selectedBookToOverwrite} 
-                          onChange={e => {
-                            const bookId = e.target.value;
-                            setSelectedBookToOverwrite(bookId);
-                            const book = availableBooks.find(b => b.id === bookId);
-                            if (book) {
-                              setBookMetadata({ title: book.title, subject: book.subject, class: book.class });
-                            }
-                          }}
-                          disabled={!selectedSubject}
-                          className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all disabled:opacity-50"
-                        >
-                          <option value="">-- Select Book --</option>
-                          {availableBooks.map((b, i) => <option key={`up-b-${b.id}`} value={b.id}>{b.title}</option>)}
-                        </select>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="space-y-4 bg-slate-50 p-6 rounded-2xl border border-slate-100">
-                      <h3 className="text-sm font-bold text-slate-500 uppercase flex items-center gap-2"><FileText className="w-4 h-4" /> Book Details</h3>
-                      <div className="space-y-3">
-                        <input type="text" placeholder="Grade/Class (e.g. 10)" value={bookMetadata.class} onChange={e => setBookMetadata({...bookMetadata, class: e.target.value})} className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none" />
-                        <input type="text" placeholder="Subject (e.g. Science)" value={bookMetadata.subject} onChange={e => setBookMetadata({...bookMetadata, subject: e.target.value})} className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none" />
-                        <input type="text" placeholder="Book Title" value={bookMetadata.title} onChange={e => setBookMetadata({...bookMetadata, title: e.target.value})} className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none" />
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                <div className="flex flex-col justify-center">
-                  <div className="bg-indigo-50/50 rounded-3xl p-8 border border-indigo-100 text-center space-y-6">
-                    <div className="bg-white w-16 h-16 rounded-2xl shadow-sm flex items-center justify-center mx-auto text-indigo-600">
-                      <Sparkles className="w-8 h-8" />
-                    </div>
-                    <div>
-                      <h3 className="text-xl font-bold text-slate-800 mb-2">Upload to Library</h3>
-                      <p className="text-slate-500 text-sm leading-relaxed">
-                        Upload your book PDF to the library. You can identify units, chapters, and topics later from the Book Library tab.
-                      </p>
-                    </div>
+            <div className="space-y-8">
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                <div className="lg:col-span-2 space-y-8">
+                  <div className="flex items-center justify-between bg-white p-2 rounded-2xl border border-gray-200 shadow-sm w-fit">
                     <button 
-                      onClick={uploadBookOnly} 
-                      disabled={isProcessing || (!isBulkMode && !file && !bookUrl) || (isBulkMode && !bulkUrls) || (overwriteMode && !selectedBookToOverwrite) || (!overwriteMode && !isBulkMode && (!bookMetadata.title || !bookMetadata.subject || !bookMetadata.class))}
-                      className="w-full py-4 rounded-2xl font-bold text-lg bg-indigo-600 text-white hover:bg-indigo-700 shadow-lg shadow-indigo-100 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      {isProcessing ? (
-                        <div className="flex flex-col items-center">
-                          <Loader2 className="w-6 h-6 animate-spin" />
-                          <span className="text-[10px] mt-1 font-normal opacity-80">
-                            {isBulkMode ? `Processing ${bulkProgress}/${bulkTotal}` : 'Identifying & Uploading...'}
-                          </span>
-                        </div>
-                      ) : (
-                        <><Save className="w-6 h-6" /> {isBulkMode ? 'Bulk Upload to Library' : 'Upload to Library'}</>
+                      onClick={() => { setIsCrawlerMode(false); setIsBulkMode(false); }}
+                      className={cn(
+                        "px-6 py-2 rounded-xl text-sm font-bold transition-all flex items-center gap-2",
+                        (!isCrawlerMode && !isBulkMode) ? "bg-blue-600 text-white shadow-md" : "text-gray-500 hover:bg-gray-50"
                       )}
+                    >
+                      <Upload className="w-4 h-4" /> Single Upload
                     </button>
-
-                    {isProcessing && bulkTotal > 0 && (
-                      <div className="mt-4 space-y-2">
-                        <div className="flex justify-between text-xs font-bold text-slate-500 uppercase">
-                          <span>Processing Bulk Upload</span>
-                          <span>{bulkProgress} / {bulkTotal}</span>
-                        </div>
-                        <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
-                          <motion.div 
-                            initial={{ width: 0 }}
-                            animate={{ width: `${(bulkProgress / bulkTotal) * 100}%` }}
-                            className="h-full bg-indigo-600"
-                          />
-                        </div>
-                      </div>
-                    )}
+                    <button 
+                      onClick={() => { setIsCrawlerMode(false); setIsBulkMode(true); }}
+                      className={cn(
+                        "px-6 py-2 rounded-xl text-sm font-bold transition-all flex items-center gap-2",
+                        (!isCrawlerMode && isBulkMode) ? "bg-blue-600 text-white shadow-md" : "text-gray-500 hover:bg-gray-50"
+                      )}
+                    >
+                      <Layers className="w-4 h-4" /> Bulk Links
+                    </button>
+                    <button 
+                      onClick={() => { setIsCrawlerMode(true); setIsBulkMode(false); }}
+                      className={cn(
+                        "px-6 py-2 rounded-xl text-sm font-bold transition-all flex items-center gap-2",
+                        isCrawlerMode ? "bg-blue-600 text-white shadow-md" : "text-gray-500 hover:bg-gray-50"
+                      )}
+                    >
+                      <Globe className="w-4 h-4" /> Site Agent
+                    </button>
                   </div>
+
+                  {isCrawlerMode ? (
+                    <CrawlerSection 
+                      crawlerUrl={crawlerUrl}
+                      setCrawlerUrl={setCrawlerUrl}
+                      isCrawling={isCrawling}
+                      crawlSiteForPDFs={crawlSiteForPDFs}
+                      activeAgent={activeAgent}
+                    />
+                  ) : (
+                    <UploadSection 
+                      isBulkMode={isBulkMode}
+                      setIsBulkMode={setIsBulkMode}
+                      bookUrl={bookUrl}
+                      setBookUrl={setBookUrl}
+                      bulkUrls={bulkUrls}
+                      setBulkUrls={setBulkUrls}
+                      handleFileChange={handleFileChange}
+                      file={file}
+                      bookMetadata={bookMetadata}
+                      setBookMetadata={setBookMetadata}
+                      overwriteMode={overwriteMode}
+                      setOverwriteMode={setOverwriteMode}
+                      uploadBookOnly={uploadBookOnly}
+                      handleBulkUpload={handleBulkUpload}
+                      isProcessing={isProcessing}
+                      isBulkGenerating={isBulkGenerating}
+                      bulkProgress={bulkProgress}
+                      bulkTotal={bulkTotal}
+                      error={error}
+                      success={success}
+                    />
+                  )}
+                </div>
+
+                <div className="lg:col-span-1">
+                  <AgentLogTable logs={agentLogs} />
                 </div>
               </div>
-            </section>
+            </div>
           } />
-
           <Route path="/analyze" element={
             <section className="max-w-4xl mx-auto space-y-8">
               <div className="bg-white rounded-2xl border border-slate-200 p-8 shadow-sm">
@@ -1562,73 +1591,398 @@ Example: https://site.com/book.pdf | 10 | Science | Physics Part 1"
           <Route path="/books" element={
             <div className="space-y-8">
               <div className="flex items-center justify-between">
-                <h2 className="text-2xl font-bold text-slate-800">Book Library</h2>
-                <p className="text-sm text-slate-500 hidden sm:block">Organized by Grade</p>
+                <div>
+                  <h2 className="text-2xl font-bold text-slate-800">Book Library</h2>
+                  <p className="text-sm text-slate-500">View and manage your ingested materials</p>
+                </div>
+                <button 
+                  onClick={fetchAllBooks}
+                  disabled={isLoadingLibrary}
+                  className="p-2 hover:bg-slate-100 rounded-xl transition-all text-slate-400 hover:text-indigo-600 border border-slate-100"
+                  title="Refresh Library"
+                >
+                  <RefreshCw className={cn("w-5 h-5", isLoadingLibrary && "animate-spin")} />
+                </button>
               </div>
-              
-              {Array.from(new Set(allBooks.map(b => b.class))).filter(Boolean).sort().map((grade, gIdx) => (
-                <div key={`grade-group-${grade}-${gIdx}`} className="space-y-4">
-                  <div className="flex items-center gap-2 text-slate-400">
-                    <Folder className="w-5 h-5" />
-                    <h3 className="font-bold text-slate-700">Grade {grade}</h3>
+
+              {isLoadingLibrary ? (
+                <div className="flex flex-col items-center justify-center py-20 bg-white rounded-2xl border border-slate-100 shadow-sm">
+                  <Loader2 className="w-10 h-10 text-indigo-600 animate-spin mb-4" />
+                  <p className="text-slate-500 font-medium">Connecting to Supabase...</p>
+                </div>
+              ) : supabaseError ? (
+                <div className="p-8 bg-red-50 border border-red-100 rounded-2xl text-center">
+                  <AlertCircle className="w-12 h-12 text-red-400 mx-auto mb-4" />
+                  <h3 className="text-lg font-bold text-red-800 mb-2">Connection Error</h3>
+                  <p className="text-red-600 mb-6 max-w-md mx-auto">{supabaseError}</p>
+                  <div className="flex justify-center gap-4">
+                    <button 
+                      onClick={fetchAllBooks}
+                      className="px-6 py-2 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 transition-all shadow-lg shadow-red-100"
+                    >
+                      Try Again
+                    </button>
+                    <a 
+                      href="https://supabase.com/dashboard" 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="px-6 py-2 bg-white border border-red-200 text-red-600 rounded-xl font-bold hover:bg-red-50 transition-all"
+                    >
+                      Check Dashboard
+                    </a>
                   </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pl-0 sm:pl-7">
-                    {allBooks.filter(b => b.class === grade).map((book, bIdx) => (
-                      <div key={`book-card-${book.id}-${bIdx}`} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-all group">
-                        <div className="flex items-start justify-between">
-                          <div className="flex items-center gap-3">
-                            <div className="bg-indigo-50 p-2 rounded-lg text-indigo-600">
-                              <BookIcon className="w-5 h-5" />
+                </div>
+              ) : (
+                <>
+                  {Array.from(new Set(allBooks.map(b => b.class))).filter(Boolean).sort().map((grade, gIdx) => (
+                    <div key={`grade-group-${grade}-${gIdx}`} className="space-y-4">
+                      <div className="flex items-center gap-2 text-slate-400">
+                        <Folder className="w-5 h-5" />
+                        <h3 className="font-bold text-slate-700">Grade {grade}</h3>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pl-0 sm:pl-7">
+                        {allBooks.filter(b => b.class === grade).map((book, bIdx) => (
+                          <div key={`book-card-${book.id}-${bIdx}`} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-all group">
+                            <div className="flex items-start justify-between">
+                              <div className="flex items-center gap-3">
+                                <div className="bg-indigo-50 p-2 rounded-lg text-indigo-600">
+                                  <BookIcon className="w-5 h-5" />
+                                </div>
+                                <div>
+                                  <h4 className="font-bold text-slate-800 line-clamp-1">{book.title}</h4>
+                                  <p className="text-xs text-slate-500">{book.subject}</p>
+                                </div>
+                              </div>
+                              <button 
+                                onClick={() => deleteBook(book.id!)} 
+                                className="text-slate-300 hover:text-red-500 md:opacity-0 md:group-hover:opacity-100 transition-all"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
                             </div>
-                            <div>
-                              <h4 className="font-bold text-slate-800 line-clamp-1">{book.title}</h4>
-                              <p className="text-xs text-slate-500">{book.subject}</p>
+                            <div className="mt-4 flex flex-wrap gap-2">
+                              <button 
+                                onClick={() => book.file_path && viewPdf(book.file_path)}
+                                className="text-xs font-bold text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 px-3 py-1.5 rounded-lg transition-all flex items-center gap-1"
+                              >
+                                <FileText className="w-3 h-3" /> View
+                              </button>
+                              <button 
+                                onClick={() => analyzeExistingBook(book)}
+                                className="text-xs font-bold text-indigo-600 hover:bg-indigo-50 px-3 py-1.5 rounded-lg transition-all flex items-center gap-1"
+                              >
+                                <Sparkles className="w-3 h-3" /> Analyze
+                              </button>
+                              <button 
+                                onClick={() => {
+                                  setSelectedGrade(book.class);
+                                  setSelectedSubject(book.subject);
+                                  setSelectedBook(book);
+                                  navigate('/generator');
+                                }}
+                                className="text-xs font-bold text-slate-600 hover:bg-slate-50 px-3 py-1.5 rounded-lg transition-all"
+                              >
+                                Generate Plans
+                              </button>
+                              <button 
+                                onClick={() => {
+                                  setFilterGrade(book.class);
+                                  setFilterSubject(book.subject);
+                                  navigate('/lesson-plans');
+                                }}
+                                className="text-xs font-bold text-emerald-600 hover:bg-emerald-50 px-3 py-1.5 rounded-lg transition-all"
+                              >
+                                View History
+                              </button>
                             </div>
                           </div>
-                          <button 
-                            onClick={() => deleteBook(book.id!)} 
-                            className="text-slate-300 hover:text-red-500 md:opacity-0 md:group-hover:opacity-100 transition-all"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                        <div className="mt-4 flex flex-wrap gap-2">
-                          <button 
-                            onClick={() => book.file_path && viewPdf(book.file_path)}
-                            className="text-xs font-bold text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 px-3 py-1.5 rounded-lg transition-all flex items-center gap-1"
-                          >
-                            <FileText className="w-3 h-3" /> View
-                          </button>
-                          <button 
-                            onClick={() => analyzeExistingBook(book)}
-                            className="text-xs font-bold text-indigo-600 hover:bg-indigo-50 px-3 py-1.5 rounded-lg transition-all flex items-center gap-1"
-                          >
-                            <Sparkles className="w-3 h-3" /> Analyze
-                          </button>
-                          <button 
-                            onClick={() => {
-                              setSelectedGrade(book.class);
-                              setSelectedSubject(book.subject);
-                              setSelectedBook(book);
-                              navigate('/generator');
-                            }}
-                            className="text-xs font-bold text-slate-600 hover:bg-slate-50 px-3 py-1.5 rounded-lg transition-all"
-                          >
-                            Generate Plans
-                          </button>
-                        </div>
+                        ))}
                       </div>
-                    ))}
+                    </div>
+                  ))}
+
+                  {allBooks.length === 0 && (
+                    <div className="text-center py-20 bg-white rounded-2xl border border-slate-200 border-dashed">
+                      <BookOpen className="w-12 h-12 text-slate-200 mx-auto mb-4" />
+                      <p className="text-slate-400">No books uploaded yet. Go to the Upload tab to start.</p>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          } />
+          <Route path="/grading" element={
+            <div className="space-y-8">
+              <div className="bg-white rounded-3xl border border-slate-200 p-8 shadow-sm">
+                <div className="flex items-center justify-between mb-8">
+                  <div>
+                    <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-3">
+                      <CheckCircle2 className="text-emerald-600 w-7 h-7" />
+                      AI Automated Grading
+                    </h2>
+                    <p className="text-slate-500">Grading powered by Gemini 1.5 Flash</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Skill Taxonomy:</span>
+                    <span className="px-3 py-1 bg-indigo-50 text-indigo-600 rounded-full text-xs font-bold">Bloom's Revised</span>
                   </div>
                 </div>
-              ))}
 
-              {allBooks.length === 0 && (
-                <div className="text-center py-20 bg-white rounded-2xl border border-slate-200 border-dashed">
-                  <BookOpen className="w-12 h-12 text-slate-200 mx-auto mb-4" />
-                  <p className="text-slate-400">No books uploaded yet. Go to the Upload tab to start.</p>
+                <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
+                  <div className="lg:col-span-1 space-y-6">
+                    <div>
+                      <h3 className="font-bold text-slate-700 text-xs uppercase tracking-wider mb-4">Pending Classes</h3>
+                      <div className="space-y-2">
+                         <div className="p-3 bg-indigo-50 border border-indigo-200 rounded-xl cursor-not-allowed">
+                            <p className="font-bold text-indigo-900 text-sm">Class 10 - Mathematics</p>
+                            <p className="text-[10px] text-indigo-600 font-medium">Algebraic Expressions</p>
+                         </div>
+                         <div className="p-3 bg-white border border-slate-100 rounded-xl hover:border-slate-200 cursor-pointer transition-all">
+                            <p className="font-bold text-slate-800 text-sm">Class 9 - Physics</p>
+                            <p className="text-[10px] text-slate-500">Newtonian Mechanics</p>
+                         </div>
+                      </div>
+                    </div>
+
+                    <div>
+                      <h3 className="font-bold text-slate-700 text-xs uppercase tracking-wider mb-4">Submissions (12)</h3>
+                      <div className="space-y-2 max-h-[400px] overflow-y-auto pr-2 scrollbar-thin">
+                         {[
+                           { name: 'Kushal Shrestha', status: 'pending', id: '1' },
+                           { name: 'Rohan Chaudhary', status: 'graded', id: '2', score: 85 },
+                           { name: 'Anjali Gurung', status: 'pending', id: '3' },
+                           { name: 'Sujata Thapa', status: 'pending', id: '4' },
+                           { name: 'Bibek Rai', status: 'graded', id: '5', score: 92 },
+                         ].map(sub => (
+                           <div key={sub.id} className={cn("p-3 border rounded-xl flex items-center justify-between group cursor-pointer transition-all", sub.id === '1' ? "border-indigo-500 bg-white shadow-sm" : "border-slate-100 opacity-60")}>
+                             <div className="flex items-center gap-2">
+                               <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-[10px] font-bold text-slate-500">
+                                 {sub.name.split(' ').map(n => n[0]).join('')}
+                               </div>
+                               <div>
+                                 <p className="text-xs font-bold text-slate-800">{sub.name}</p>
+                                 <p className="text-[10px] text-slate-400">{sub.status}</p>
+                               </div>
+                             </div>
+                             {sub.score && <span className="text-[10px] font-bold text-emerald-600">{sub.score}%</span>}
+                           </div>
+                         ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="lg:col-span-3 space-y-6">
+                    <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6">
+                      <div className="flex items-center justify-between mb-4 pb-4 border-b border-slate-200">
+                        <div className="flex items-center gap-3">
+                          <h4 className="font-bold text-lg">Kushal Shrestha</h4>
+                          <span className="px-2 py-0.5 bg-orange-100 text-orange-600 rounded text-[10px] font-bold uppercase">Pending AI Grade</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button className="p-2 hover:bg-slate-200 rounded-lg transition-all text-slate-400"><ChevronLeft className="w-4 h-4" /></button>
+                          <button className="p-2 hover:bg-slate-200 rounded-lg transition-all text-slate-400"><ChevronRight className="w-4 h-4" /></button>
+                        </div>
+                      </div>
+
+                      <div className="space-y-6">
+                        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+                          <div className="flex items-center justify-between mb-3">
+                            <h5 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Question #4 (Level: Hard)</h5>
+                            <span className="text-xs font-bold text-slate-400">Total Marks: 10</span>
+                          </div>
+                          <p className="font-medium text-slate-800 mb-4">Factorize the expression: <span className="font-mono text-indigo-600">4x² - 12x + 9</span> and solve for x when the expression equals 0.</p>
+                          
+                          <div className="bg-slate-50 p-4 rounded-lg border border-slate-100">
+                            <h6 className="text-[10px] font-bold text-slate-400 uppercase mb-2">Student Response:</h6>
+                            <p className="font-mono text-sm text-slate-700 whitespace-pre-wrap">4x² - 12x + 9 
+= (2x)² - 2(2x)(3) + 3²
+= (2x - 3)²
+If (2x - 3)² = 0, then 2x - 3 = 0, so x = 3/2.</p>
+                          </div>
+
+                          <div className="mt-6 p-4 bg-emerald-50 border border-emerald-100 rounded-xl relative overflow-hidden group">
+                             <div className="absolute top-0 right-0 p-3">
+                               <Sparkles className="w-5 h-5 text-emerald-400" />
+                             </div>
+                             <h6 className="text-[10px] font-bold text-emerald-600 uppercase mb-3 flex items-center gap-2">
+                               <Bot className="w-3 h-3" /> AI Analysis & Score
+                             </h6>
+                             <div className="flex items-start gap-4">
+                               <div className="bg-white px-3 py-2 rounded-lg border border-emerald-200 text-center shadow-sm">
+                                 <p className="text-xl font-black text-emerald-600 leading-none">10</p>
+                                 <p className="text-[8px] font-bold text-slate-400 uppercase mt-1">/ 10</p>
+                               </div>
+                               <div className="flex-1">
+                                 <p className="text-sm text-emerald-950 font-medium leading-relaxed">The student correctly identified the expression as a perfect square trinomial (a-b)². The factorization steps are clear and mathematically sound. The solution for x is also accurate. Correct use of the identity (a² - 2ab + b²).</p>
+                                 <div className="mt-3 flex flex-wrap gap-2">
+                                   <span className="text-[10px] font-bold bg-white text-emerald-600 px-2 py-0.5 rounded border border-emerald-100">Algebraic Thinking</span>
+                                   <span className="text-[10px] font-bold bg-white text-emerald-600 px-2 py-0.5 rounded border border-emerald-100">Factorization</span>
+                                 </div>
+                               </div>
+                             </div>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      <div className="mt-8 flex items-center justify-end gap-3 border-t border-slate-200 pt-6">
+                        <button className="px-6 py-2.5 bg-white border border-slate-200 text-slate-600 rounded-xl font-bold hover:bg-slate-50 transition-all">Manual Review</button>
+                        <button className="px-8 py-2.5 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100 flex items-center gap-2">
+                          <CheckCircle2 className="w-5 h-5" />
+                          Confirm & Post
+                        </button>
+                      </div>
+                    </div>
+                  </div>
                 </div>
-              )}
+              </div>
+            </div>
+          } />
+          <Route path="/personalized" element={
+            <div className="space-y-8">
+              <div className="bg-white rounded-3xl border border-slate-200 p-8 shadow-sm">
+                <div className="flex items-center justify-between mb-8">
+                  <div>
+                    <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-3">
+                      <Target className="text-indigo-600 w-7 h-7" />
+                      Personalized Learning Paths
+                    </h2>
+                    <p className="text-slate-500">AI-driven intervention strategies for students</p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
+                  <div className="lg:col-span-1 space-y-6">
+                    <div>
+                      <h3 className="font-bold text-slate-700 text-xs uppercase tracking-wider mb-4">Student Segments</h3>
+                      <div className="space-y-2">
+                        <div className="p-3 bg-red-50 border border-red-100 rounded-xl cursor-not-allowed">
+                          <p className="font-bold text-red-900 text-sm">Critical Gaps (4)</p>
+                        </div>
+                        <div className="p-3 bg-white border border-slate-100 rounded-xl hover:border-slate-200 cursor-pointer">
+                          <p className="font-bold text-slate-800 text-sm">Progressing (18)</p>
+                        </div>
+                        <div className="p-3 bg-white border border-slate-100 rounded-xl hover:border-slate-200 cursor-pointer">
+                          <p className="font-bold text-slate-800 text-sm">Advanced enrichment (6)</p>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <div className="p-4 bg-indigo-50 rounded-2xl border border-indigo-100">
+                      <h4 className="text-xs font-bold text-indigo-700 uppercase mb-2">AI Tip</h4>
+                      <p className="text-[11px] text-indigo-900 leading-relaxed">Students struggling with Newton's 2nd Law often lack confidence in vector decomposition. Consider assigning visual simulation tasks.</p>
+                    </div>
+                  </div>
+
+                  <div className="lg:col-span-3 space-y-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {[
+                        { name: 'Kushal Shrestha', gap: 'Quadratic Equation Solving', performance: 42, recommendation: 'Interactive step-by-step solver module via Khan Academy' },
+                        { name: 'Sujata Thapa', gap: 'Trigonometric Identities', performance: 38, recommendation: 'Visual geometric proofs video series' },
+                      ].map((student, i) => (
+                        <div key={i} className="bg-white border border-slate-200 p-6 rounded-2xl shadow-sm hover:shadow-md transition-all group">
+                          <div className="flex items-center justify-between mb-4">
+                            <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">At-Risk Student</span>
+                            <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                          </div>
+                          <h4 className="font-bold text-slate-800 mb-1">{student.name}</h4>
+                          <div className="flex items-center gap-2 mb-4">
+                            <div className="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                              <div className="h-full bg-red-500" style={{ width: `${student.performance}%` }} />
+                            </div>
+                            <span className="text-[10px] font-bold text-red-600">{student.performance}% Proficiency</span>
+                          </div>
+                          
+                          <div className="mb-4">
+                            <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">Identified Gap</p>
+                            <p className="text-sm font-medium text-slate-700 bg-slate-50 px-3 py-2 rounded-lg">{student.gap}</p>
+                          </div>
+
+                          <div className="bg-indigo-50/50 p-4 rounded-xl border border-indigo-100/50">
+                            <div className="flex items-center gap-2 mb-2">
+                               <Sparkles className="w-3 h-3 text-indigo-600" />
+                               <span className="text-[10px] font-bold text-indigo-600 uppercase">AI Recommendation</span>
+                            </div>
+                            <p className="text-xs text-indigo-900 leading-relaxed italic">"{student.recommendation}"</p>
+                          </div>
+
+                          <div className="mt-4 flex gap-2">
+                             <button className="flex-1 py-2 bg-indigo-600 text-white rounded-lg text-xs font-bold hover:bg-indigo-700 transition-all">Assign Resource</button>
+                             <button className="px-3 py-2 border border-slate-200 text-slate-400 rounded-lg hover:text-slate-600 transition-all"><MessageSquare className="w-4 h-4" /></button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="bg-white border border-slate-200 border-dashed p-8 text-center rounded-3xl">
+                      <p className="text-slate-400 font-medium">Connect more student data to unlock deeper behavioral insights and path optimization.</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          } />
+          <Route path="/warning-system" element={
+            <div className="space-y-8">
+              <div className="bg-white rounded-3xl border border-slate-200 p-8 shadow-sm">
+                <div className="flex items-center justify-between mb-8">
+                  <div>
+                    <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-3">
+                      <AlertTriangle className="text-amber-500 w-7 h-7" />
+                      Early Warning System
+                    </h2>
+                    <p className="text-slate-500">Detecting student disengagement before it impacts grades</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <span className="px-3 py-1 bg-amber-50 text-amber-700 rounded-full text-xs font-bold border border-amber-100 flex items-center gap-1.5">
+                      <Zap className="w-3 h-3" /> 8 New Alerts
+                    </span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                   <div className="bg-slate-50 rounded-2xl p-6 border border-slate-100">
+                      <h3 className="font-bold text-slate-700 text-sm mb-4">Disengagement Matrix</h3>
+                      <div className="space-y-4">
+                         {[
+                           { label: 'Long idle time during exams', count: 5, color: 'text-amber-600' },
+                           { label: 'Unusual rapid guessing', count: 12, color: 'text-red-600' },
+                           { label: 'Declining attendance (Virtual)', count: 3, color: 'text-slate-600' },
+                         ].map((item, i) => (
+                           <div key={i} className="flex items-center justify-between p-3 bg-white rounded-xl shadow-sm border border-slate-100">
+                             <span className="text-xs font-medium text-slate-600">{item.label}</span>
+                             <span className={cn("text-xs font-black", item.color)}>{item.count}</span>
+                           </div>
+                         ))}
+                      </div>
+                   </div>
+
+                   <div className="lg:col-span-2 space-y-4">
+                      <h3 className="font-bold text-slate-700 text-sm">Critical Disengagement Alerts</h3>
+                      <div className="space-y-3">
+                         {[
+                           { name: 'Bibek Rai', reason: 'High time/Incorrect ratio', detail: 'Spent 12 mins on a 2-min MCQ and still failed.', severity: 'High' },
+                           { name: 'Anjali Gurung', reason: 'Abnormal Guessing Pattern', detail: 'Completed 20 questions in 45 seconds.', severity: 'Medium' },
+                         ].map((alert, i) => (
+                           <div key={i} className="p-4 bg-white border border-slate-200 rounded-2xl hover:border-amber-300 transition-all group relative overflow-hidden">
+                              <div className={cn("absolute left-0 top-0 bottom-0 w-1", alert.severity === 'High' ? 'bg-red-500' : 'bg-amber-500')} />
+                              <div className="flex items-center justify-between mb-2">
+                                <h4 className="font-bold text-slate-800">{alert.name}</h4>
+                                <span className={cn("text-[10px] font-bold px-2 py-0.5 rounded uppercase", alert.severity === 'High' ? 'bg-red-50 text-red-600' : 'bg-amber-50 text-amber-600')}>
+                                  {alert.severity} Priority
+                                </span>
+                              </div>
+                              <p className="text-xs font-bold text-slate-500 mb-1">{alert.reason}</p>
+                              <p className="text-xs text-slate-400 mb-4">{alert.detail}</p>
+                              <div className="flex gap-2">
+                                <button className="px-4 py-1.5 bg-slate-900 text-white rounded-lg text-[10px] font-bold hover:bg-slate-800 transition-all">Notify Teacher</button>
+                                <button className="px-4 py-1.5 bg-white border border-slate-200 text-slate-600 rounded-lg text-[10px] font-bold hover:bg-slate-50 transition-all">View Student Profile</button>
+                              </div>
+                           </div>
+                         ))}
+                      </div>
+                   </div>
+                </div>
+              </div>
             </div>
           } />
 
@@ -1719,26 +2073,6 @@ Example: https://site.com/book.pdf | 10 | Science | Physics Part 1"
                 {selectedBook && availableTopics.length > 0 && (
                   <div className="mt-8 pt-8 border-t border-slate-100 space-y-8">
                     <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-                      <div className="flex items-center gap-2">
-                        {isBulkGeneratingMCQs ? (
-                          <div className="w-48">
-                             <div className="flex justify-between text-[10px] font-bold text-indigo-600 mb-1 uppercase">
-                               <span>MCQs...</span>
-                               <span>{Math.round((bulkProgress / bulkTotal) * 100)}%</span>
-                             </div>
-                             <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                               <motion.div className="h-full bg-indigo-600" initial={{ width: 0 }} animate={{ width: `${(bulkProgress / bulkTotal) * 100}%` }} />
-                             </div>
-                          </div>
-                        ) : (
-                          <button
-                            onClick={handleBulkMCQGenerate}
-                            className="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-lg hover:bg-indigo-100 transition-all flex items-center gap-1"
-                          >
-                            <Sparkles className="w-3 h-3" /> Bulk MCQs
-                          </button>
-                        )}
-                      </div>
                       <div className="flex items-center gap-4">
                         <h3 className="text-xl font-bold flex items-center gap-2"><List className="text-indigo-600 w-5 h-5" /> Topics & Lessons</h3>
                         <div className="text-sm text-slate-500">
@@ -2186,10 +2520,6 @@ Example: https://site.com/book.pdf | 10 | Science | Physics Part 1"
                                 <p className="text-emerald-800 text-sm italic">{(topic as any).goals}</p>
                               </div>
                             )}
-
-                            <div className="pt-8 border-t border-slate-100">
-                               <MCQGenerator content={topic as BookContent} agent={selectedAgent} />
-                            </div>
                           </div>
                         </motion.div>
                       );
@@ -2412,9 +2742,6 @@ Example: https://site.com/book.pdf | 10 | Science | Physics Part 1"
             </section>
           } />
 
-          <Route path="/autonomous" element={<AutonomousDashboard />} />
-          <Route path="/exams" element={<ExamGenerator agent={selectedAgent} />} />
-          <Route path="/settings" element={<Settings />} />
           <Route path="/lesson-plans" element={
             <div className="space-y-6">
               <div className="bg-white rounded-2xl border border-slate-200 p-8 shadow-sm">
